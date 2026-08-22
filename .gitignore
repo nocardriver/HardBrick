@@ -1,0 +1,95 @@
+# ============================================
+# HaradBrick (STM32U575xx) - .gitignore
+# 工程类型: STM32CubeMX + CMake/Ninja + clang (ATfE) + J-Link
+# ============================================
+
+# ---------- 构建产物 (CMake / Ninja) ----------
+build/
+*/build/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.elf
+*.axf
+*.hex
+*.bin
+*.map
+*.lst
+*.out
+*.d
+*.su
+*.dep
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+
+# CMake 生成文件（若在根目录生成）
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+CMakeUserPresets.json
+
+# ---------- STM32CubeMX ----------
+# CubeMX 内部元数据，每次保存自动重写，无需入库
+.mxproject
+*.ioc.bak
+*.ioc.old
+
+# ---------- 调试器 (J-Link / Ozone) ----------
+# 本地调试器配置，含个人路径/断点等，不应共享
+Debug/
+*.jdebug
+*.jdebug.user
+*.jlink
+*.jflash
+*.emProject
+*.emSession
+*.svg
+*.jlink
+
+# ---------- IDE / 编辑器 ----------
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.*.sw[a-z]
+*.code-workspace
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Keil / IAR / Eclipse（备用） ----------
+*.uvguix.*
+*.uvoptx
+*.uvproj.bak
+*.bak
+.settings/
+.project
+.cproject
+.metadata/
+RTE/
+DebugConfig/
+Listings/
+Objects/
+
+# ---------- 日志 / 临时文件 ----------
+*.log
+*.tmp
+*.temp
+*.cache

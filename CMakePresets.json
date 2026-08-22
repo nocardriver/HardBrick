@@ -1,0 +1,69 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+		    "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+            }
+        },
+        {
+            "name": "atfe-default",
+            "hidden": true,
+            "inherits": "default",
+            "toolchainFile": "${sourceDir}/cmake/atfe-arm-none-eabi.cmake",
+            "cacheVariables": {
+                "ATFE_ROOT": "C:/Users/Forwork/AppData/Local/Programs/ATfE-22.1.0-Windows-x86_64"
+            }
+        },
+        {
+            "name": "Debug",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "Release",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "ATfE-Debug",
+            "inherits": "atfe-default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "ATfE-Release",
+            "inherits": "atfe-default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "Debug",
+            "configurePreset": "Debug"
+        },
+        {
+            "name": "Release",
+            "configurePreset": "Release"
+        },
+        {
+            "name": "ATfE-Debug",
+            "configurePreset": "ATfE-Debug"
+        },
+        {
+            "name": "ATfE-Release",
+            "configurePreset": "ATfE-Release"
+        }
+    ]
+}
