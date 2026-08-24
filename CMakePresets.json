@@ -16,7 +16,6 @@
             "inherits": "default",
             "toolchainFile": "${sourceDir}/cmake/atfe-arm-none-eabi.cmake",
             "cacheVariables": {
-                "ATFE_ROOT": "C:/Users/Forwork/AppData/Local/Programs/ATfE-22.1.0-Windows-x86_64"
             }
         },
         {
