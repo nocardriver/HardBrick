@@ -24,7 +24,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "SEGGER_RTT.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -94,6 +94,10 @@ int main(void)
   // 启动电源
   HAL_Delay(100);
   HAL_GPIO_WritePin(PW_EN_GPIO_Port, PW_EN_Pin, GPIO_PIN_SET);
+  HAL_Delay(100);
+  // RTT初始化输出
+  SEGGER_RTT_Init();
+  SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
   /* USER CODE END 2 */
 
   /* Infinite loop */
