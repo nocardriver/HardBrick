@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "dcache.h"
+#include "gpdma.h"
 #include "icache.h"
 #include "usart.h"
 #include "gpio.h"
@@ -27,6 +28,7 @@
 /* USER CODE BEGIN Includes */
 #include "SEGGER_RTT.h"
 #include "tx_api.h"
+#include "uart_dma.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +50,8 @@
 
 /* USER CODE BEGIN PV */
 TX_THREAD my_thread;
+TX_THREAD gps_thread;
+uart_dma_t gps_uart;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -73,10 +77,34 @@ void my_thread_entry(ULONG thread_input){
   }
 }
 
+/**
+ * @brief GPS 接收测试线程：从 uart_dma 环形缓冲提取 NMEA 行并通过 RTT 打印
+ */
+void gps_thread_entry(ULONG thread_input){
+  char line[128];
+  while(1)
+  {
+    if (uart_dma_read_line(&gps_uart, line, sizeof(line)))
+    {
+      SEGGER_RTT_printf(0, "GPS> %s\r\n", line);
+    }
+    else
+    {
+      /* 暂无线数据，让出 CPU */
+      tx_thread_sleep(1);
+    }
+  }
+}
+
 void tx_application_define(void *first_unused_memory){
   tx_thread_create(&my_thread, "test thread",
                     my_thread_entry, 0x1234, first_unused_memory, 1024,
                     3, 3, TX_NO_TIME_SLICE, TX_AUTO_START);
+  /* 第二线程需要分配独立的栈内存 */
+  first_unused_memory = (uint8_t *)first_unused_memory + 1024;
+  tx_thread_create(&gps_thread, "gps rx thread",
+                    gps_thread_entry, 0x5678, first_unused_memory, 1024,
+                    4, 4, TX_NO_TIME_SLICE, TX_AUTO_START);
 }
 /* USER CODE END 0 */
 
@@ -109,9 +137,10 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_GPDMA1_Init();
   MX_DCACHE1_Init();
-  MX_ICACHE_Init();
   MX_USART2_UART_Init();
+  MX_ICACHE_Init();
   /* USER CODE BEGIN 2 */
   // 启动电源
   HAL_Delay(100);
@@ -120,6 +149,10 @@ int main(void)
   // RTT初始化输出
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
+
+  // 启动 GPS UART 接收（DMA + IDLE + 环形缓冲）
+  uart_dma_init(&gps_uart, &huart2);
+  uart_dma_start(&gps_uart);
 
   // start threadx kernel
   tx_kernel_enter();

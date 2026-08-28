@@ -40,6 +40,9 @@ add_subdirectory(cmake/stm32cubemx)
 # Add user-defined service modules (exports SERVICES_LIBS)
 add_subdirectory(Services)
 
+# Add user-defined BSP modules (exports BSP_LIBS)
+add_subdirectory(BSP)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
@@ -82,4 +85,5 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
     ${SERVICES_LIBS}
+    ${BSP_LIBS}
 )
