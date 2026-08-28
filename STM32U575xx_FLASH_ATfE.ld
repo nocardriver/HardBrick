@@ -232,6 +232,11 @@ SECTIONS
     . = ALIGN(8);
   } >RAM
 
+  /* ThreadX: base of the RAM area that may be used by the kernel/application.
+     Used by _tx_initialize_low_level to compute the first-unused-memory
+     argument passed to tx_application_define(). */
+  __RAM_segment_used_end__ = .;
+
   /*
    * NOTE: The /DISCARD/ section of the original STM32CubeMX linker script
    * (which discards libc.a/libm.a/libgcc.a) was removed, because the Arm

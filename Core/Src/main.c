@@ -25,6 +25,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "SEGGER_RTT.h"
+#include "tx_api.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,7 +46,7 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+TX_THREAD my_thread;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -57,6 +58,25 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/**
+ * @brief first threadx test thread
+ */
+void my_thread_entry(ULONG thread_input){
+  /* Enter into a forever loop. */
+  while(1)
+  {
+    /* Increment thread counter. */
+    SEGGER_RTT_WriteString(0, "threadx working\r\n");
+    /* Sleep for 1 second. */
+    tx_thread_sleep(100);
+  }
+}
+
+void tx_application_define(void *first_unused_memory){
+  tx_thread_create(&my_thread, "test thread",
+                    my_thread_entry, 0x1234, first_unused_memory, 1024,
+                    3, 3, TX_NO_TIME_SLICE, TX_AUTO_START);
+}
 /* USER CODE END 0 */
 
 /**
@@ -98,6 +118,9 @@ int main(void)
   // RTT初始化输出
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
+
+  // start threadx kernel
+  tx_kernel_enter();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -167,6 +190,28 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM6 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM6)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
