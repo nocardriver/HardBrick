@@ -20,6 +20,7 @@
 #include "main.h"
 #include "dcache.h"
 #include "icache.h"
+#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -110,6 +111,7 @@ int main(void)
   MX_GPIO_Init();
   MX_DCACHE1_Init();
   MX_ICACHE_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   // 启动电源
   HAL_Delay(100);

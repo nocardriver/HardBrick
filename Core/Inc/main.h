@@ -59,6 +59,8 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define PW_EN_Pin GPIO_PIN_3
 #define PW_EN_GPIO_Port GPIOB
+#define GPS_NRST_Pin GPIO_PIN_8
+#define GPS_NRST_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
