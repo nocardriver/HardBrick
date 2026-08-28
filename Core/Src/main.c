@@ -52,6 +52,8 @@
 TX_THREAD my_thread;
 TX_THREAD gps_thread;
 uart_dma_t gps_uart;
+static uint8_t gps_ring[1024];   /* GPS 环形缓冲（1Hz 全量输出约 500~800 字节/秒） */
+static uint8_t gps_chunk[256];   /* GPS DMA 接收缓冲（大于最长的一条 NMEA 语句） */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -151,7 +153,7 @@ int main(void)
   SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
 
   // 启动 GPS UART 接收（DMA + IDLE + 环形缓冲）
-  uart_dma_init(&gps_uart, &huart2);
+  uart_dma_init(&gps_uart, &huart2, gps_ring, sizeof(gps_ring), gps_chunk, sizeof(gps_chunk));
   uart_dma_start(&gps_uart);
 
   // start threadx kernel
