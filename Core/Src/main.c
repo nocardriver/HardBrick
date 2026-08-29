@@ -28,7 +28,6 @@
 /* USER CODE BEGIN Includes */
 #include "SEGGER_RTT.h"
 #include "tx_api.h"
-#include "uart_dma.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,13 +49,8 @@
 
 /* USER CODE BEGIN PV */
 TX_THREAD my_thread;
-TX_THREAD gps_thread;
-uart_dma_t gps_uart;
-static uint8_t gps_ring[1024];   /* GPS 环形缓冲（1Hz 全量输出约 500~800 字节/秒） */
-static uint8_t gps_chunk[256];   /* GPS DMA 接收缓冲（大于最长的一条 NMEA 语句） */
 /* 线程栈：静态分配放 .bss，由链接器核算总量（溢出在链接期报错）；Cortex-M 栈需 8 字节对齐 */
 static uint8_t my_thread_stack[1024] __attribute__((aligned(8)));
-static uint8_t gps_thread_stack[1024] __attribute__((aligned(8)));
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -82,34 +76,12 @@ void my_thread_entry(ULONG thread_input){
   }
 }
 
-/**
- * @brief GPS 接收测试线程：从 uart_dma 环形缓冲提取 NMEA 行并通过 RTT 打印
- */
-void gps_thread_entry(ULONG thread_input){
-  char line[128];
-  while(1)
-  {
-    if (uart_dma_read_line(&gps_uart, line, sizeof(line)))
-    {
-      SEGGER_RTT_printf(0, "GPS> %s\r\n", line);
-    }
-    else
-    {
-      /* 暂无线数据，让出 CPU */
-      tx_thread_sleep(1);
-    }
-  }
-}
-
 void tx_application_define(void *first_unused_memory){
   /* 任务栈为静态数组（见 PV 区），此处只传入指针与大小 */
   (void)first_unused_memory;
   tx_thread_create(&my_thread, "test thread",
                     my_thread_entry, 0x1234, my_thread_stack, sizeof(my_thread_stack),
                     3, 3, TX_NO_TIME_SLICE, TX_AUTO_START);
-  tx_thread_create(&gps_thread, "gps rx thread",
-                    gps_thread_entry, 0x5678, gps_thread_stack, sizeof(gps_thread_stack),
-                    4, 4, TX_NO_TIME_SLICE, TX_AUTO_START);
 }
 /* USER CODE END 0 */
 
@@ -154,10 +126,6 @@ int main(void)
   // RTT初始化输出
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
-
-  // 启动 GPS UART 接收（DMA + IDLE + 环形缓冲）
-  uart_dma_init(&gps_uart, &huart2, gps_ring, sizeof(gps_ring), gps_chunk, sizeof(gps_chunk));
-  uart_dma_start(&gps_uart);
 
   // start threadx kernel
   tx_kernel_enter();
