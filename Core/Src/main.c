@@ -54,6 +54,9 @@ TX_THREAD gps_thread;
 uart_dma_t gps_uart;
 static uint8_t gps_ring[1024];   /* GPS 环形缓冲（1Hz 全量输出约 500~800 字节/秒） */
 static uint8_t gps_chunk[256];   /* GPS DMA 接收缓冲（大于最长的一条 NMEA 语句） */
+/* 线程栈：静态分配放 .bss，由链接器核算总量（溢出在链接期报错）；Cortex-M 栈需 8 字节对齐 */
+static uint8_t my_thread_stack[1024] __attribute__((aligned(8)));
+static uint8_t gps_thread_stack[1024] __attribute__((aligned(8)));
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -99,13 +102,13 @@ void gps_thread_entry(ULONG thread_input){
 }
 
 void tx_application_define(void *first_unused_memory){
+  /* 任务栈为静态数组（见 PV 区），此处只传入指针与大小 */
+  (void)first_unused_memory;
   tx_thread_create(&my_thread, "test thread",
-                    my_thread_entry, 0x1234, first_unused_memory, 1024,
+                    my_thread_entry, 0x1234, my_thread_stack, sizeof(my_thread_stack),
                     3, 3, TX_NO_TIME_SLICE, TX_AUTO_START);
-  /* 第二线程需要分配独立的栈内存 */
-  first_unused_memory = (uint8_t *)first_unused_memory + 1024;
   tx_thread_create(&gps_thread, "gps rx thread",
-                    gps_thread_entry, 0x5678, first_unused_memory, 1024,
+                    gps_thread_entry, 0x5678, gps_thread_stack, sizeof(gps_thread_stack),
                     4, 4, TX_NO_TIME_SLICE, TX_AUTO_START);
 }
 /* USER CODE END 0 */
