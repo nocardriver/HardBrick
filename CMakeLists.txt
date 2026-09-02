@@ -63,6 +63,19 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 
+# ThreadX integration: CubeMX regenerates stub handlers for the Cortex-M
+# system exceptions in Core/Src/stm32u5xx_it.c on every code generation.
+# The ThreadX port (Services/threadx) provides the real implementations of
+# PendSV_Handler (scheduler), SysTick_Handler (kernel tick) and
+# HardFault/UsageFault (stack overflow handling). Rename the CubeMX stubs
+# at compile time so they never clash with the ThreadX definitions; the
+# renamed stubs are dead code and are removed by --gc-sections.
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/Core/Src/stm32u5xx_it.c
+    PROPERTIES COMPILE_DEFINITIONS
+    "PendSV_Handler=MX_Unused_PendSV_Handler;SysTick_Handler=MX_Unused_SysTick_Handler;HardFault_Handler=MX_Unused_HardFault_Handler;UsageFault_Handler=MX_Unused_UsageFault_Handler"
+)
+
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
