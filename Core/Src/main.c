@@ -51,6 +51,7 @@
 TX_THREAD my_thread;
 /* 线程栈：静态分配放 .bss，由链接器核算总量（溢出在链接期报错）；Cortex-M 栈需 8 字节对齐 */
 static uint8_t my_thread_stack[1024] __attribute__((aligned(8)));
+uint8_t usart2_rx_buffer[1024] = {0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -126,6 +127,9 @@ int main(void)
   // RTT初始化输出
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
+  // LC760Z相关初始化
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart2, usart2_rx_buffer, 1024);
+  HAL_GPIO_WritePin(GPS_NRST_GPIO_Port, GPS_NRST_Pin, GPIO_PIN_SET);  // 拉高复位引脚
 
   // start threadx kernel
   tx_kernel_enter();
@@ -196,7 +200,23 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
+  if(huart->Instance == USART2){
+    /* 半传输事件：既不是完整帧，也不能 rearm，直接忽略，等 IDLE / TC */
+    if(HAL_UARTEx_GetRxEventType(huart) == HAL_UART_RXEVENT_HT){
+      return;
+    }
+    SEGGER_RTT_printf(0, "%s", usart2_rx_buffer);
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart2, usart2_rx_buffer, 1024);
+  }
+}
 
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart){
+  if(huart->Instance == USART2){
+    /* TODO: 如果重启接收失败将永远关闭接收，待后续完善 */
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart2, usart2_rx_buffer, 1024);
+  }
+}
 /* USER CODE END 4 */
 
 /**

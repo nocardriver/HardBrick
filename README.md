@@ -25,6 +25,15 @@ STM32U575 项目（STM32CubeMX 生成 + CMake 构建）。
 2. `ATFE_ROOT` 环境变量：`setx ATFE_ROOT "<路径>"`（Windows，新终端生效）
 3. PATH 回退：将 ATfE 的 `bin` 目录加入 PATH
 
+> **注意**：`setx` / 修改系统 PATH 只对**新启动的进程**生效。已打开的 VS Code 及其终端仍使用旧环境，
+> 必须**完全退出并重启 VS Code**（不是新建终端）才能识别到新配置。
+
+### 常见问题
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| 配置报错 `Cannot find clang from ATfE` | ATfE 的 `bin` 不在当前进程 PATH，且 `ATFE_ROOT` 未设置 | 完全重启 VS Code；或临时用 `-DATFE_ROOT=<路径>` 配置 |
+
 ### 构建命令
 
 ```powershell
