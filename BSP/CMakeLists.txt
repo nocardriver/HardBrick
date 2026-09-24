@@ -7,10 +7,11 @@ cmake_minimum_required(VERSION 3.22)
 #
 
 # Register modules
-# add_subdirectory(LC760Z)   # 阶段1加入：LC760Z GPS 驱动
+add_subdirectory(LC760Z)
 
 # Export list of BSP libraries to the parent (top-level) scope
 set(BSP_LIBS
+    lc760z
     # Add new BSP library targets here
     PARENT_SCOPE
 )
