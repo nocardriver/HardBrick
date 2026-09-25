@@ -9,11 +9,13 @@ cmake_minimum_required(VERSION 3.22)
 # Register modules
 add_subdirectory(SEGGER_RTT)
 add_subdirectory(threadx)
+add_subdirectory(minmea)
 
 # Export list of service libraries to the parent (top-level) scope
 set(SERVICES_LIBS
     segger_rtt
     threadx
+    minmea
     # Add new service library targets here
     PARENT_SCOPE
 )

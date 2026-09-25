@@ -71,7 +71,7 @@ void my_thread_entry(ULONG thread_input){
   while(1)
   {
     /* Increment thread counter. */
-    SEGGER_RTT_WriteString(0, "threadx working\r\n");
+    // SEGGER_RTT_WriteString(0, "threadx working\r\n");
     /* Sleep for 1 second. */
     tx_thread_sleep(100);
   }
@@ -205,6 +205,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
     if(HAL_UARTEx_GetRxEventType(huart) == HAL_UART_RXEVENT_HT){
       return;
     }
+    SEGGER_RTT_printf(0, "========LC760Z NEW MESSAGE========\r\n");
     SEGGER_RTT_printf(0, "%s", LC760Z_rx_data);
     LC760Z_uart_start_receive();
   }
