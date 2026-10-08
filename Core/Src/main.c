@@ -29,6 +29,7 @@
 #include "SEGGER_RTT.h"
 #include "tx_api.h"
 #include "LC760Z.h"
+#include "gps.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -83,6 +84,9 @@ void tx_application_define(void *first_unused_memory){
   tx_thread_create(&my_thread, "test thread",
                     my_thread_entry, 0x1234, my_thread_stack, sizeof(my_thread_stack),
                     3, 3, TX_NO_TIME_SLICE, TX_AUTO_START);
+
+  /* GPS 应用层：创建解析线程与事件组（ISR 侧入口为 gps_rx_push） */
+  gps_init();
 }
 /* USER CODE END 0 */
 
@@ -205,8 +209,10 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
     if(HAL_UARTEx_GetRxEventType(huart) == HAL_UART_RXEVENT_HT){
       return;
     }
-    SEGGER_RTT_printf(0, "========LC760Z NEW MESSAGE========\r\n");
-    SEGGER_RTT_printf(0, "%s", LC760Z_rx_data);
+    /* ISR 只搬运：Size 是本次 burst 的有效字节数（DMA_NORMAL 下 HAL 已 abort DMA
+       并置 RxState=READY，所以紧接着 rearm 是合法的）。不能用整个缓冲当字符串，
+       否则会把上一帧更长的残留一起读进来；解析与打印都在 gps 线程里做 */
+    gps_rx_push(LC760Z_rx_data, Size);
     LC760Z_uart_start_receive();
   }
 }

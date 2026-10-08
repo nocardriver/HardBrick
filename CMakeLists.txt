@@ -43,6 +43,9 @@ add_subdirectory(Services)
 # Add user-defined BSP modules (exports BSP_LIBS)
 add_subdirectory(BSP)
 
+# Add user-defined application modules (exports APP_LIBS)
+add_subdirectory(Apps)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
@@ -86,4 +89,5 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
     ${SERVICES_LIBS}
     ${BSP_LIBS}
+    ${APP_LIBS}
 )
