@@ -21,6 +21,7 @@
 #include "dcache.h"
 #include "gpdma.h"
 #include "icache.h"
+#include "spi.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -120,9 +121,10 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_GPDMA1_Init();
-  MX_DCACHE1_Init();
   MX_USART2_UART_Init();
   MX_ICACHE_Init();
+  MX_DCACHE1_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   // 启动电源
   HAL_Delay(100);
@@ -249,6 +251,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 /**
   * @brief  This function is executed in case of error occurrence.
+  * @param None
   * @retval None
   */
 void Error_Handler(void)
