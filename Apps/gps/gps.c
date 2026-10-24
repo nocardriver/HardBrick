@@ -50,8 +50,9 @@ static TX_THREAD            g_thread;
 static TX_EVENT_FLAGS_GROUP g_events;
 static uint8_t              g_stack[GPS_THREAD_STACK_SIZE] __attribute__((aligned(8)));
 
-/* 最新定位快照：解析线程写，调试器/其他模块读 */
-static gps_nav_t g_nav;
+/* 最新定位快照：解析线程写，显示线程读，二者用 g_nav_mutex 串行化 */
+static gps_nav_t  g_nav;
+static TX_MUTEX   g_nav_mutex;
 
 /* ------------------------------------------------------------------------- */
 /* 环形缓冲：中断写入，线程读出                                                */
@@ -131,6 +132,43 @@ static bool gps_line_feed(gps_line_t *ctx, uint8_t byte)
 /* ------------------------------------------------------------------------- */
 
 /**
+ * @brief 把 minmea 的 ddmm.mmmm 定点坐标换算成 1e-7 度
+ * @param coord minmea 的坐标字段（value/scale 为 NMEA 原始值，
+ *              如 3123.0416 → value=31230416、scale=10000）
+ * @retval 1e-7 度，北/东为正；字段为空（scale=0）时返回 0
+ * @note   度 = value/(scale*100)，余下的分钟部分再除以 60。
+ *         中间量用 int64，避免 rem*1e7 溢出；对负数做对称四舍五入。
+ */
+static int32_t gps_coord_to_e7(const struct minmea_float *coord)
+{
+  int64_t value;
+  int64_t scale;
+  int64_t deg;
+  int64_t rem;
+  int64_t denom;
+  int64_t frac;
+
+  if (coord->scale == 0) {
+    return 0;
+  }
+
+  value = (int64_t)coord->value;
+  scale = (int64_t)coord->scale;
+  deg   = value / (scale * 100);
+  rem   = value % (scale * 100);
+  denom = 60 * scale;
+
+  frac = rem * 10000000LL;
+  if (frac >= 0) {
+    frac += denom / 2;
+  } else {
+    frac -= denom / 2;
+  }
+
+  return (int32_t)(deg * 10000000LL + frac / denom);
+}
+
+/**
  * @brief 用 minmea 解析一条完整语句，合并更新快照
  * @param sentence '$' 开头、'\0' 结尾、已剥掉 CR/LF 的单条语句
  */
@@ -139,39 +177,66 @@ static void gps_parse_line(const char *sentence)
   switch (minmea_sentence_id(sentence, true)) {   /* true：校验和不符直接丢弃 */
   case MINMEA_SENTENCE_RMC: {
     struct minmea_sentence_rmc rmc;
+    int32_t lat_e7;
+    int32_t lon_e7;
+    bool    pos_valid;
+    uint8_t fix;
+    uint8_t sats;
 
     if (!minmea_parse_rmc(&rmc, sentence)) {
       break;
     }
 
-    g_nav.date    = rmc.date;
-    g_nav.time    = rmc.time;
-    g_nav.lat_deg = minmea_tocoord(&rmc.latitude);
-    g_nav.lon_deg = minmea_tocoord(&rmc.longitude);
+    /* 纯计算放在锁外，尽量缩短共享快照的临界区 */
+    lat_e7    = gps_coord_to_e7(&rmc.latitude);
+    lon_e7    = gps_coord_to_e7(&rmc.longitude);
+    pos_valid = (rmc.latitude.scale != 0) && (rmc.longitude.scale != 0);
+
+    (void)tx_mutex_get(&g_nav_mutex, TX_WAIT_FOREVER);
+    g_nav.date      = rmc.date;
+    g_nav.time      = rmc.time;
+    g_nav.lat_e7    = lat_e7;
+    g_nav.lon_e7    = lon_e7;
+    g_nav.pos_valid = pos_valid;
     if (!rmc.valid) {
       g_nav.fix = 0u;   /* RMC 报无效就清零；有效时定位质量以 GGA 为准 */
+    } else if (g_nav.fix == 0u) {
+      g_nav.fix = 1u;   /* GGA 缺失/滞后的兜底：RMC=A 至少说明是单点有效 */
     }
+    g_nav.tick = tx_time_get();
+    fix  = g_nav.fix;
+    sats = g_nav.numsat;
+    (void)tx_mutex_put(&g_nav_mutex);
 
     /* 唯一一条观测输出，其余变量直接看调试器里的 g_nav。
-       坐标按 1e-6 度整数打印（RTT printf 不支持 %f） */
-    SEGGER_RTT_printf(0, "[GPS] %c %02d-%02d %02d:%02d:%02d lat=%d lon=%d fix=%d sats=%d\r\n",
+       坐标按 1e-7 度整数打印（RTT printf 不支持 %f） */
+    SEGGER_RTT_printf(0, "[GPS] %c %02d-%02d %02d:%02d:%02d lat=%ld lon=%ld fix=%d sats=%d\r\n",
                       rmc.valid ? 'A' : 'V',
-                      g_nav.date.month, g_nav.date.day,
-                      g_nav.time.hours, g_nav.time.minutes, g_nav.time.seconds,
-                      (int)(g_nav.lat_deg * 1000000.0f), (int)(g_nav.lon_deg * 1000000.0f),
-                      (int)g_nav.fix, (int)g_nav.numsat);
+                      rmc.date.month, rmc.date.day,
+                      rmc.time.hours, rmc.time.minutes, rmc.time.seconds,
+                      (long)lat_e7, (long)lon_e7, (int)fix, (int)sats);
   } break;
 
   case MINMEA_SENTENCE_GGA: {
     struct minmea_sentence_gga gga;
+    int32_t alt_mm;
+    bool    alt_valid;
 
     if (!minmea_parse_gga(&gga, sentence)) {
       break;
     }
 
-    g_nav.fix    = (uint8_t)gga.fix_quality;   /* 0=无效 1=单点 2=差分 */
-    g_nav.numsat = (uint8_t)gga.satellites_tracked;
-    g_nav.alt_m  = minmea_tofloat(&gga.altitude);
+    /* 海拔按毫米定点保存；scale=1 时 rescale 到 1000 即 value*1000 */
+    alt_valid = (gga.altitude.scale != 0);
+    alt_mm    = alt_valid ? (int32_t)minmea_rescale(&gga.altitude, 1000) : 0;
+
+    (void)tx_mutex_get(&g_nav_mutex, TX_WAIT_FOREVER);
+    g_nav.fix       = (uint8_t)gga.fix_quality;   /* 0=无效 1=单点 2=差分 */
+    g_nav.numsat    = (uint8_t)gga.satellites_tracked;
+    g_nav.alt_mm    = alt_mm;
+    g_nav.alt_valid = alt_valid;
+    g_nav.tick      = tx_time_get();
+    (void)tx_mutex_put(&g_nav_mutex);
   } break;
 
   default:
@@ -207,6 +272,9 @@ static void gps_thread_entry(ULONG thread_input)
 
 void gps_init(void)
 {
+  /* 快照互斥锁：GPS 线程写、显示线程读。必须在创建/启动任何读线程之前建好 */
+  (void)tx_mutex_create(&g_nav_mutex, "gps nav", TX_INHERIT);
+
   /* 不清零 g_ring：UART 接收在 tx_kernel_enter() 之前就已启动 */
   (void)tx_event_flags_create(&g_events, "gps rx");
   (void)tx_thread_create(&g_thread, "gps", gps_thread_entry, 0u,
@@ -216,5 +284,11 @@ void gps_init(void)
 
 void gps_get_nav(gps_nav_t *out)
 {
+  if (!out) {
+    return;
+  }
+
+  (void)tx_mutex_get(&g_nav_mutex, TX_WAIT_FOREVER);
   *out = g_nav;
+  (void)tx_mutex_put(&g_nav_mutex);
 }

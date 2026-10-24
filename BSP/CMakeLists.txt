@@ -8,10 +8,12 @@ cmake_minimum_required(VERSION 3.22)
 
 # Register modules
 add_subdirectory(LC760Z)
+add_subdirectory(ILI9341)
 
 # Export list of BSP libraries to the parent (top-level) scope
 set(BSP_LIBS
     lc760z
+    ili9341
     # Add new BSP library targets here
     PARENT_SCOPE
 )

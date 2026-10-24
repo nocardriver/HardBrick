@@ -31,6 +31,8 @@
 #include "tx_api.h"
 #include "LC760Z.h"
 #include "gps.h"
+#include "ili9341.h"
+#include "display.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -88,6 +90,9 @@ void tx_application_define(void *first_unused_memory){
 
   /* GPS 应用层：创建解析线程与事件组（ISR 侧入口为 gps_rx_push） */
   gps_init();
+
+  /* 显示应用层：快照读取在 gps_init 之后，线程优先级低于 GPS */
+  display_init();
 }
 /* USER CODE END 0 */
 
@@ -133,6 +138,10 @@ int main(void)
   // RTT初始化输出
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
+  // 屏幕初始化（约 1.3 s：复位 + 软复位 + 退出睡眠）；此时 GPS 仍按住复位，不丢数据
+  if (!ili9341_init()) {
+    SEGGER_RTT_WriteString(0, "[LCD] init failed\r\n");
+  }
   // LC760Z初始化
   LC760Z_init();
 
