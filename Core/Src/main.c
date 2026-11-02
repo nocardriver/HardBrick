@@ -22,6 +22,7 @@
 #include "gpdma.h"
 #include "icache.h"
 #include "spi.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -33,6 +34,8 @@
 #include "gps.h"
 #include "ili9341.h"
 #include "display.h"
+#include "backlight.h"
+#include "backlight_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -93,6 +96,9 @@ void tx_application_define(void *first_unused_memory){
 
   /* 显示应用层：快照读取在 gps_init 之后，线程优先级低于 GPS */
   display_init();
+
+  /* 屏幕背光：KEY_LIGHT 上升沿点亮 3 s */
+  backlight_app_init();
 }
 /* USER CODE END 0 */
 
@@ -130,7 +136,11 @@ int main(void)
   MX_ICACHE_Init();
   MX_DCACHE1_Init();
   MX_SPI1_Init();
+  MX_TIM17_Init();
   /* USER CODE BEGIN 2 */
+  /* 背光 PWM 先以 0% 启动：电源打开后引脚就是确定的低电平，不会闪一下 */
+  bool backlight_ready = backlight_init();
+
   // 启动电源
   HAL_Delay(100);
   HAL_GPIO_WritePin(PW_EN_GPIO_Port, PW_EN_Pin, GPIO_PIN_SET);
@@ -138,6 +148,9 @@ int main(void)
   // RTT初始化输出
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
+  if (!backlight_ready) {
+    SEGGER_RTT_WriteString(0, "[BL] PWM init failed\r\n");
+  }
   // 屏幕初始化（约 1.3 s：复位 + 软复位 + 退出睡眠）；此时 GPS 仍按住复位，不丢数据
   if (!ili9341_init()) {
     SEGGER_RTT_WriteString(0, "[LCD] init failed\r\n");
@@ -214,6 +227,13 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin){
+  if(GPIO_Pin == KEY_LIGHT_Pin){
+    /* ISR 只发事件：点亮与 3 s 计时都在 backlight 线程里做 */
+    backlight_app_button_isr();
+  }
+}
+
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
   if(huart->Instance == USART2){
     /* 半传输事件：既不是完整帧，也不能 rearm，直接忽略，等 IDLE / TC */

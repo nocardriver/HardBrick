@@ -57,6 +57,9 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define KEY_LIGHT_Pin GPIO_PIN_0
+#define KEY_LIGHT_GPIO_Port GPIOA
+#define KEY_LIGHT_EXTI_IRQn EXTI0_IRQn
 #define SPI1_CS_Pin GPIO_PIN_4
 #define SPI1_CS_GPIO_Port GPIOA
 #define DIS_DC_Pin GPIO_PIN_4
@@ -67,6 +70,8 @@ void Error_Handler(void);
 #define PW_EN_GPIO_Port GPIOB
 #define GPS_NRST_Pin GPIO_PIN_8
 #define GPS_NRST_GPIO_Port GPIOB
+#define DIS_BACKLIGHT_Pin GPIO_PIN_9
+#define DIS_BACKLIGHT_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
