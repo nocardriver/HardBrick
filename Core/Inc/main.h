@@ -66,6 +66,9 @@ void Error_Handler(void);
 #define DIS_DC_GPIO_Port GPIOC
 #define DIS_RST_Pin GPIO_PIN_0
 #define DIS_RST_GPIO_Port GPIOB
+#define SDMMC_CD_Pin GPIO_PIN_7
+#define SDMMC_CD_GPIO_Port GPIOC
+#define SDMMC_CD_EXTI_IRQn EXTI7_IRQn
 #define PW_EN_Pin GPIO_PIN_3
 #define PW_EN_GPIO_Port GPIOB
 #define GPS_NRST_Pin GPIO_PIN_8

@@ -21,9 +21,11 @@
 #include "dcache.h"
 #include "gpdma.h"
 #include "icache.h"
+#include "sdmmc.h"
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
+#include "usb_otg.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -36,6 +38,7 @@
 #include "display.h"
 #include "backlight.h"
 #include "backlight_app.h"
+#include "sdcard.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -146,6 +149,8 @@ int main(void)
   MX_DCACHE1_Init();
   MX_SPI1_Init();
   MX_TIM17_Init();
+  MX_SDMMC1_SD_Init();
+  MX_USB_OTG_FS_PCD_Init();
   /* USER CODE BEGIN 2 */
   /* 背光 PWM 先以 0% 启动：电源打开后引脚就是确定的低电平，不会闪一下 */
   bool backlight_ready = backlight_init();
@@ -157,6 +162,36 @@ int main(void)
   // RTT初始化输出
   SEGGER_RTT_Init();
   SEGGER_RTT_WriteString(0, "System Boot OK\r\n");
+
+  /* TF 卡硬件自检（只读）：十几毫秒级，结果同时留在 g_sd_probe 里给 J-Link 看 */
+  sdcard_probe();
+  {
+    char label[12];
+
+    for (uint32_t i = 0u; i < 11u; i++) {
+      label[i] = (char)g_sd_probe.label[i];
+    }
+    label[11] = '\0';
+
+    SEGGER_RTT_printf(0, "[SD] stage=%u cd=%u type=%u ver=%u rca=%u err=0x%08x\r\n",
+                      (unsigned)g_sd_probe.stage, (unsigned)g_sd_probe.cd_pin,
+                      (unsigned)g_sd_probe.card_type, (unsigned)g_sd_probe.card_version,
+                      (unsigned)g_sd_probe.rca, (unsigned)g_sd_probe.hal_error);
+    if (g_sd_probe.stage >= (uint32_t)SDCARD_STAGE_MBR_OK) {
+      SEGGER_RTT_printf(0, "[SD] %u x %u B, mbr=%u part=0x%02x lba=%u fat32=%u\r\n",
+                        (unsigned)g_sd_probe.block_nbr, (unsigned)g_sd_probe.block_size,
+                        (unsigned)g_sd_probe.mbr_sig_ok, (unsigned)g_sd_probe.part_type,
+                        (unsigned)g_sd_probe.part_lba, (unsigned)g_sd_probe.fat32_ok);
+    }
+    if (g_sd_probe.stage >= (uint32_t)SDCARD_STAGE_BS_OK) {
+      SEGGER_RTT_printf(0, "[SD] bps=%u spc=%u rsv=%u fats=%u fatsz=%u label=%s\r\n",
+                        (unsigned)g_sd_probe.bytes_per_sector,
+                        (unsigned)g_sd_probe.sectors_per_cluster,
+                        (unsigned)g_sd_probe.reserved_sectors,
+                        (unsigned)g_sd_probe.num_fats, (unsigned)g_sd_probe.fat_size,
+                        label);
+    }
+  }
   if (!backlight_ready) {
     SEGGER_RTT_WriteString(0, "[BL] PWM init failed\r\n");
   }
@@ -200,8 +235,9 @@ void SystemClock_Config(void)
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48|RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;

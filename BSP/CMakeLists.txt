@@ -10,12 +10,14 @@ cmake_minimum_required(VERSION 3.22)
 add_subdirectory(LC760Z)
 add_subdirectory(ILI9341)
 add_subdirectory(Backlight)
+add_subdirectory(SDCard)
 
 # Export list of BSP libraries to the parent (top-level) scope
 set(BSP_LIBS
     lc760z
     ili9341
     backlight
+    sdcard
     # Add new BSP library targets here
     PARENT_SCOPE
 )
