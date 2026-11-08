@@ -17,8 +17,8 @@
 /** 背光线程栈（字节，静态分配） */
 #define BACKLIGHT_APP_STACK_SIZE 512u
 
-/** 保持点亮时间：3 s（ThreadX tick = 100 Hz，即 10 ms/tick） */
-#define BACKLIGHT_APP_HOLD_TICKS 300u
+/** 保持点亮时间：10 s（ThreadX tick = 100 Hz，即 10 ms/tick） */
+#define BACKLIGHT_APP_HOLD_TICKS 1000u
 
 /** 事件标志：按键出现上升沿 */
 #define BACKLIGHT_APP_EVENT_PRESS 0x1u
