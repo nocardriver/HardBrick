@@ -5,8 +5,9 @@ cmake_minimum_required(VERSION 3.22)
 #
 #   ili9341.c       driver core: init sequence, address window, fill, blit.
 #                   No HAL/RTOS dependency, reusable as-is under LVGL's flush cb.
-#   ili9341_port.c  platform glue: SPI1 blocking transmit, CS/DC/RST, HAL_Delay.
-#                   The only translation unit allowed to include HAL headers.
+#   ili9341_port.c  platform glue: SPI1 transmit (polling + DMA), CS/DC/RST,
+#                   HAL_Delay and the DMA completion semaphore.
+#                   The only translation unit allowed to include HAL/ThreadX headers.
 #
 # Sources are listed explicitly (no file(GLOB)) so a renamed or missing file
 # fails at configure time instead of silently dropping out of the build.
@@ -27,5 +28,7 @@ target_sources(ili9341 PRIVATE ${ILI9341_Src})
 target_include_directories(ili9341 PUBLIC ${ILI9341_Inc_Dirs})
 
 # Inherit STM32CubeMX include paths and symbols (USE_HAL_DRIVER, STM32U575xx);
-# needed by ili9341_port.c for the HAL/spi/main headers.
-target_link_libraries(ili9341 PUBLIC stm32cubemx)
+# needed by ili9341_port.c for the HAL/spi/main headers. The ThreadX kernel is
+# only needed by the port layer (DMA completion semaphore), so the driver core
+# stays RTOS-free and portable.
+target_link_libraries(ili9341 PUBLIC stm32cubemx threadx)

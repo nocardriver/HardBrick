@@ -87,6 +87,15 @@ void my_thread_entry(ULONG thread_input){
 void tx_application_define(void *first_unused_memory){
   /* 任务栈为静态数组（见 PV 区），此处只传入指针与大小 */
   (void)first_unused_memory;
+
+  /* 屏幕 SPI 发送切 DMA：在这里创建完成信号量（ili9341_init() 已在内核启动前跑完，
+     那一段仍是轮询）。未配置 SPI1_TX DMA 时返回 false，发送保持轮询 */
+  if (ili9341_rtos_attach()) {
+    SEGGER_RTT_WriteString(0, "[LCD] SPI DMA enabled\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "[LCD] SPI DMA unavailable, polling mode\r\n");
+  }
+
   tx_thread_create(&my_thread, "test thread",
                     my_thread_entry, 0x1234, my_thread_stack, sizeof(my_thread_stack),
                     3, 3, TX_NO_TIME_SLICE, TX_AUTO_START);

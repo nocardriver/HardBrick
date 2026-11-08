@@ -60,6 +60,16 @@ bool ili9341_init(void);
 bool ili9341_is_ready(void);
 
 /**
+ * @brief 绑定 RTOS：创建 DMA 完成信号量，之后大块像素自动改走 SPI1_TX DMA
+ * @retval true 已启用 DMA；false 未配置 SPI1_TX DMA（或信号量创建失败），
+ *         发送保持轮询，功能不受影响
+ * @note  必须在 tx_application_define() 内、显示线程启动前调用。
+ *        ili9341_init() 在 tx_kernel_enter() 之前执行，那时只能走轮询；
+ *        绑定之前的所有发送（含初始化）也都是轮询。
+ */
+bool ili9341_rtos_attach(void);
+
+/**
  * @brief 设置屏幕方向
  * @param rot 方向枚举
  * @note  改变方向会同时改变 ili9341_width()/ili9341_height() 的返回值；

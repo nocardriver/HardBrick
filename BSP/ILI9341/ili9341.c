@@ -172,6 +172,11 @@ bool ili9341_is_ready(void)
   return g_ready;
 }
 
+bool ili9341_rtos_attach(void)
+{
+  return ili9341_port_dma_attach();
+}
+
 void ili9341_set_rotation(ili9341_rotation_t rot)
 {
   uint8_t madctl;
