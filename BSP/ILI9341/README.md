@@ -39,11 +39,15 @@
 
 - **电源**：`PW_EN`（PB3）是**整机电源控制**，由 `main.c` 启动时拉高，不是屏幕背光，也不由显示驱动管理。本模块和 `Apps/display` 都不读写该引脚；背光由独立的 `BSP/Backlight`（TIM17_CH1/PB9）管理，按键点亮策略在 `Apps/backlight`。
 - **40 MHz 超出 ILI9341 手册的串行写时序上限（10 MHz）**。Brick 演示工程用 10 MHz 验证；本工程按当前 CubeMX 配置跑 40 MHz，短排线下通常可用。若出现花屏、错位或颜色异常，先把 `SPI1.BaudRatePrescaler` 改为 8（20 MHz）或 16（10 MHz）再复测。
-- **MADCTL=0x48**（MX=1、BGR=1）沿用 Brick / Adafruit 的标准竖屏值。若上电后发现：
-  - 红蓝互换：把 `0x48` 改成 `0x40`（BGR=0）；
-  - 画面左右镜像：把 `0x48` 改成 `0x08`（MX=0）；
-  - 画面上下镜像：把 `0x48` 改成 `0x88`（MY=1）。
-  这三个值都在 `ili9341.c` 的 `g_init_seq` 与 `ili9341_set_rotation()` 里。
+- **默认方向**：由 `ili9341.h` 的 `ILI9341_DEFAULT_ROTATION` 决定，当前是
+  `ILI9341_ROT_PORTRAIT_2`（MADCTL=0x88，MX=0 MY=1 BGR=1）——本机面板倒装，
+  逻辑画面相对 `ILI9341_ROT_PORTRAIT_1`（0x48，MX=1）旋转 180°。
+  换装配方向只改这个宏：`PORTRAIT_1` 正向、`PORTRAIT_2` 旋转 180°。
+- **方向只定义一处**：`g_init_seq` 里的 MADCTL 只写 BGR 位（`ILI9341_MADCTL_BGR`），
+  方向位由 `ili9341_init()` 末尾的 `ili9341_set_rotation()` 统一写入，
+  不再需要同步初始化表与 `set_rotation()` 两个 0x48。
+- **红蓝互换**：把 `ILI9341_MADCTL_BGR` 与 `ili9341_set_rotation()` 各枚举值的
+  0x08 位去掉（BGR→RGB）。
 - 本驱动使用**阻塞发送**，不做 DMA。DCache 已使能，但阻塞模式下 CPU 直接读源缓冲，不存在 cache 一致性问题。将来改 DMA 时必须对源缓冲做 `SCB_CleanDCache_by_Addr()`。
 - 面板 SDO 未接回 MCU，ILI9341 的读寄存器/读 GRAM 功能不可用；驱动只做写方向，不做读回校验。
 - SPI1 是全双工 2LINES 配置，但本工程只写不读；MISO 上的无效数据不会影响发送（HAL 只轮询 TXP/EOT）。
@@ -73,7 +77,8 @@ void     ili9341_draw_pixel(uint16_t x, uint16_t y, uint16_t color);
 - `ili9341_fill_rect()` 自动裁剪到屏幕内；`ili9341_blit()` **不裁剪**（裁剪会改变源缓冲的行跨度），调用者必须保证矩形完全在屏幕内。
 - `pixels` 必须是大端 RGB565：`pixels[2*i]=color>>8`、`pixels[2*i+1]=color&0xFF`。
 - 颜色常量用 `ILI9341_RGB565(r,g,b)` 生成，例如 `ILI9341_RGB565(0, 200, 255)`。
-- 方向：竖屏 `ILI9341_ROT_PORTRAIT_1`（240×320，默认），横屏 `ILI9341_ROT_LANDSCAPE_1/2`（320×240）。
+- 方向：竖屏 `ILI9341_ROT_PORTRAIT_1/2`（240×320；默认 `PORTRAIT_2`，即面板倒装、旋转 180°），
+  横屏 `ILI9341_ROT_LANDSCAPE_1/2`（320×240）。
 
 ## 5. 与 LVGL 的衔接
 

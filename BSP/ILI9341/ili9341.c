@@ -20,6 +20,9 @@
 #define ILI9341_CMD_RAMWR         0x2Cu
 #define ILI9341_CMD_MADCTL        0x36u
 
+/** MADCTL 的 BGR 位：面板按 BGR 排布；方向位由 ili9341_set_rotation() 统一设置 */
+#define ILI9341_MADCTL_BGR        0x08u
+
 /** 单色填充时复用的行缓冲像素数（240 px = 480 B） */
 #define ILI9341_FILL_CHUNK_PIXELS  240u
 
@@ -36,7 +39,9 @@ typedef struct {
 
 /**
  * 初始化序列：STARTEK KD035QVRMA223 面板 + ILI9341，已验证于 Brick 演示工程。
- * 0x3A=0x55 选 16 bit/pixel，0x36=0x48 为竖屏 + BGR。
+ * 0x3A=0x55 选 16 bit/pixel；0x36(MADCTL) 在这里只定 BGR 位，方向位由
+ * ili9341_init() 末尾的 ili9341_set_rotation(ILI9341_DEFAULT_ROTATION) 写入，
+ * 保证"方向"只有一处定义。
  */
 static const ili9341_init_cmd_t g_init_seq[] = {
   {ILI9341_CMD_SWRESET, 0u, {0}, 1000u},
@@ -51,7 +56,7 @@ static const ili9341_init_cmd_t g_init_seq[] = {
   {0xC1u, 1u, {0x10u}, 0u},                                          /* POWER CONTROL 2 */
   {0xC5u, 2u, {0x3Eu, 0x28u}, 0u},                                   /* VCOM CONTROL 1 */
   {0xC7u, 1u, {0x86u}, 0u},                                          /* VCOM CONTROL 2 */
-  {ILI9341_CMD_MADCTL, 1u, {0x48u}, 0u},                             /* 竖屏 + BGR */
+  {ILI9341_CMD_MADCTL, 1u, {ILI9341_MADCTL_BGR}, 0u},                /* 只定 BGR，方向在 init 末尾设置 */
   {0x3Au, 1u, {0x55u}, 0u},                                          /* PIXEL FORMAT = RGB565 */
   {0xB1u, 2u, {0x00u, 0x18u}, 0u},                                   /* FRAME RATE */
   {0xB6u, 3u, {0x08u, 0x82u, 0x27u}, 0u},                            /* DISPLAY FUNCTION */
@@ -151,7 +156,8 @@ bool ili9341_init(void)
   }
 
   g_ready = true;
-  ili9341_set_rotation(ILI9341_ROT_PORTRAIT_1);
+  /* 面板倒装：默认方向相对 PORTRAIT_1 旋转 180°（见 ILI9341_DEFAULT_ROTATION） */
+  ili9341_set_rotation(ILI9341_DEFAULT_ROTATION);
 
   if (!g_ready) {
     return false;

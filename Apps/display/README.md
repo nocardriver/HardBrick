@@ -91,5 +91,7 @@ flowchart LR
 - 无触摸：面板的 XPT2046/电阻触摸未接 ADC，本模块不处理输入。
 - 无中文字库：需要中文时换 16×16 点阵或等 LVGL + 字库。
 - 固定竖屏：布局按 240×320 写死；改横屏需要重排 `display.c` 的坐标宏。
+  面板倒装由 BSP 的 `ILI9341_DEFAULT_ROTATION`（`PORTRAIT_2`，旋转 180°）处理，
+  逻辑坐标仍是 240×320，本模块不为装配方向做补偿。
 - 接 LVGL 后：保留 `ili9341_init/blit`，把 `display_draw_static` 与各字段
   替换成 LVGL 的 screen/object，`display_text.c` 可整体删除。

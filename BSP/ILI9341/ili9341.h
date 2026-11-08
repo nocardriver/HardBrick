@@ -31,13 +31,22 @@
               (((uint16_t)(g) & 0xFCu) << 3) | \
               (((uint16_t)(b) & 0xF8u) >> 3)))
 
-/** 屏幕方向（MADCTL 值沿用已验证的 ILI9341 演示工程） */
+/** 屏幕方向（MADCTL 值沿用已验证的 ILI9341 演示工程，均保持 BGR=1） */
 typedef enum {
-  ILI9341_ROT_PORTRAIT_1 = 0,   /**< 240x320，MX=0 MY=0 */
-  ILI9341_ROT_LANDSCAPE_1,      /**< 320x240，MX=0 MY=0 */
-  ILI9341_ROT_PORTRAIT_2,       /**< 240x320，MX=0 MY=1 */
-  ILI9341_ROT_LANDSCAPE_2,      /**< 320x240，MX=1 MY=1 */
+  ILI9341_ROT_PORTRAIT_1 = 0,   /**< 240x320，MX=1（0x48），面板正向装配 */
+  ILI9341_ROT_LANDSCAPE_1,      /**< 320x240，MV=1（0x28） */
+  ILI9341_ROT_PORTRAIT_2,       /**< 240x320，MX=0 MY=1（0x88），相对 PORTRAIT_1 旋转 180° */
+  ILI9341_ROT_LANDSCAPE_2,      /**< 320x240，MV=1 MX=1 MY=1（0xE8） */
 } ili9341_rotation_t;
+
+/**
+ * 上电后的默认方向。
+ *
+ * 本机面板是倒装的：逻辑坐标相对正向（PORTRAIT_1）需要旋转 180°，所以默认用
+ * PORTRAIT_2。宽高仍是 240x320，App 的布局坐标不需要为装配方向做任何补偿。
+ * 面板正装时只改这一个宏即可，不必再动初始化序列。
+ */
+#define ILI9341_DEFAULT_ROTATION  ILI9341_ROT_PORTRAIT_2
 
 /**
  * @brief 初始化面板：硬件复位 → 厂商初始化序列 → 清屏为黑
