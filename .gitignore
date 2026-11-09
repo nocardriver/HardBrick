@@ -55,9 +55,10 @@ Debug/
 *.emProject
 *.emSession
 *.svg
-*.jlink
 
 # ---------- IDE / 编辑器 ----------
+# .vscode/ 目前只由 STM32Cube for Agentic AI 安装器生成
+# （mcp.json / extensions.json），属于本机环境，不入库
 .vscode/
 .idea/
 *.iml
@@ -73,13 +74,18 @@ Debug/
 .DS_Store
 Thumbs.db
 desktop.ini
+.clangd/
+.cache/
+*.orig
+*.rej
 
 # ---------- Keil / IAR / Eclipse（备用） ----------
+# .settings/ 存放 Cube bundle store/lock（bundles*.store.json）与 Eclipse 配置，均为本机状态
+.settings/
 *.uvguix.*
 *.uvoptx
 *.uvproj.bak
 *.bak
-.settings/
 .project
 .cproject
 .metadata/
@@ -87,6 +93,29 @@ RTE/
 DebugConfig/
 Listings/
 Objects/
+
+# ---------- STM32Cube for Agentic AI（安装器部署） ----------
+# cube agentic-ai setup 部署的上下文、指令与部署锁，换机后重新运行 setup 即可重建，
+# 不入库以免 600 KB 供应商文本随每次 update 产生冲突。
+.cube-ai/
+.github/skills/cube-agentic-ai-*/
+.github/instructions/cube-agentic-ai-*.instructions.md
+# 注意：.github/copilot-instructions.md 是项目级 AI 指令，由人工维护，应正常入库。
+
+# ---------- Python（Agentic AI 上下文的运行时） ----------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+pip-wheel-metadata/
 
 # ---------- 日志 / 临时文件 ----------
 *.log
