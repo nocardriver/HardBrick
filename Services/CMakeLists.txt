@@ -9,6 +9,7 @@ cmake_minimum_required(VERSION 3.22)
 # Register modules
 add_subdirectory(SEGGER_RTT)
 add_subdirectory(threadx)
+add_subdirectory(usbx)
 add_subdirectory(minmea)
 add_subdirectory(FatFs)
 
@@ -16,6 +17,7 @@ add_subdirectory(FatFs)
 set(SERVICES_LIBS
     segger_rtt
     threadx
+    usbx
     minmea
     fatfs
     # Add new service library targets here

@@ -26,9 +26,11 @@ target_sources(storage PRIVATE ${STORAGE_App_Src})
 target_include_directories(storage PUBLIC ${STORAGE_App_Inc_Dirs})
 
 # App layer may depend on Services (AGENTS.md): fatfs for the file API, threadx
-# for the thread, segger_rtt for the self-test log.
+# for the thread, segger_rtt for the self-test log. usb_msc provides the media
+# mutex / "PC owns the card" gate that keeps FatFs and the USB MSC path apart.
 target_link_libraries(storage PUBLIC
     fatfs
     threadx
     segger_rtt
+    usb_msc
 )

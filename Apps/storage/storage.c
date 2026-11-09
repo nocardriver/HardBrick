@@ -13,6 +13,8 @@
 #include "tx_api.h"
 #include "SEGGER_RTT.h"
 
+#include "usb_msc.h"
+
 #include <string.h>
 
 /* 追加记录的内容：前后缀写死，中间的数字用 ThreadX tick，
@@ -282,7 +284,24 @@ static void storage_thread_entry(ULONG thread_input)
 {
   (void)thread_input;
 
-  run_selftest();
+  /* PC 通过 USB 用着这张卡时，固件不能再去挂载/写文件：两边同时改 FAT 会互相
+     破坏。这里等主机把卡放开（拔掉 USB）再做自检；PC 一直在用时本线程就一直
+     睡，不占用 CPU，也不影响其它线程。日志只打一次，避免每秒刷屏。 */
+  if (usb_msc_host_active()) {
+    SEGGER_RTT_WriteString(0, "[SD] PC owns the TF card, FAT self-test deferred\r\n");
+  }
+  while (usb_msc_host_active()) {
+    tx_thread_sleep(STORAGE_HOST_WAIT_TICKS);
+  }
+
+  /* 卡是共享外设：拿到媒体锁再操作，避免和 USB 侧的块传输交叉 */
+  if (usb_msc_media_lock(USB_MSC_MEDIA_LOCK_TIMEOUT)) {
+    run_selftest();
+    usb_msc_media_unlock();
+  } else {
+    SEGGER_RTT_WriteString(0, "[SD] media lock timeout, FAT self-test skipped\r\n");
+  }
+
   report();
 
   /* 自检做完没有活干，直接挂起；将来落盘功能在这个线程上加队列后由队列唤醒 */
@@ -314,4 +333,25 @@ FATFS *storage_volume(void)
     return NULL;
   }
   return &g_fs;
+}
+
+bool storage_resync(void)
+{
+  FRESULT rc;
+
+  /* 还没挂过卷就没什么可刷新的，交给存储线程下次自检 */
+  if (g_storage.stage < (uint32_t)STORAGE_STAGE_MOUNT_OK) {
+    return false;
+  }
+
+  /* PC 可能改过卡上的目录结构，本地 FATFS 缓存（BPB / FAT 窗口）已经过期，
+     opt=1 强制重新走 disk_initialize + 重新读引导扇区 */
+  if (!usb_msc_media_lock(USB_MSC_MEDIA_LOCK_TIMEOUT)) {
+    return false;
+  }
+
+  rc = f_mount(&g_fs, STORAGE_DRIVE, 1u);
+  usb_msc_media_unlock();
+
+  return rc == FR_OK;
 }

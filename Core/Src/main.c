@@ -40,6 +40,7 @@
 #include "backlight_app.h"
 #include "sdcard.h"
 #include "storage.h"
+#include "usb_msc.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -113,6 +114,10 @@ void tx_application_define(void *first_unused_memory){
   /* 屏幕背光：KEY_LIGHT 上升沿点亮 3 s */
   backlight_app_init();
 
+  /* USB 设备（MSC）：必须早于 storage_init——storage 要用这里的媒体互斥量串行化
+     对 TF 卡的访问，而 PC 枚举后 usb_msc 会置位"主机占用"标志把 storage 挡在外面 */
+  usb_msc_init();
+
   /* 存储应用层：挂载 FAT 卷并做一次读写自检。
      必须在内核启动后——FatFs 的卷互斥量是 ThreadX 对象 */
   storage_init();
@@ -157,6 +162,13 @@ int main(void)
   MX_SDMMC1_SD_Init();
   MX_USB_OTG_FS_PCD_Init();
   /* USER CODE BEGIN 2 */
+  /* 模拟 USB 拔出：OTG 软断开（DCTL.SDIS=1）并把 D+ (PA12) 拉成 GPIO 输出低，
+     主机立刻判定设备已拔出。等 USBX 设备栈就绪后由 usb_msc 线程把 D+ 交还给
+     OTG 并打开内部上拉，主机看到一次干净的插入并重新枚举——这样每次软件复位
+     （含调试器复位）都不需要手动拔插 USB 线。
+     必须放在 MX_USB_OTG_FS_PCD_Init() 之后：HAL_PCD_Stop() 需要有效的 PCD 句柄 */
+  usb_msc_boot_detach();
+
   /* 背光 PWM 先以 0% 启动：电源打开后引脚就是确定的低电平，不会闪一下 */
   bool backlight_ready = backlight_init();
 

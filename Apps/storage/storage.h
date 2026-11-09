@@ -18,6 +18,11 @@
  * @note 线程自检完就挂起。后续要落盘的功能（轨迹记录、配置保存）在这个线程上
  *       加队列即可，不要在各处直接调 f_write——FatFs 虽然有卷锁保证不崩，但
  *       多个线程各写各的文件会让卡上的目录结构难以预期。
+ *
+ * @note TF 卡会通过 USB（Apps/usb_msc）暴露给 PC。PC 枚举成功后 usb_msc 会置位
+ *       "主机占用"标志，本线程发现后不再动文件系统；PC 断开后标志清除，
+ *       重新挂载（storage_resync）即可继续使用。块设备级别由 usb_msc 提供的
+ *       媒体互斥量串行化，见 usb_msc_media_lock()。
  */
 
 #ifndef STORAGE_H
@@ -50,6 +55,13 @@ extern "C" {
 
 /** storage 线程优先级：最低的一档，磁盘 I/O 不该抢在 GPS / 显示前面 */
 #define STORAGE_THREAD_PRIORITY     7u
+
+/**
+ * PC 占用 TF 卡时 storage 线程的等待粒度（tick）
+ * @note 100 tick = 1 s。PC 通过 USB 用着卡的时候本线程只是定期醒来看看，
+ *       等主机放开（拔掉 USB）再补做自检，详见 usb_msc.h。
+ */
+#define STORAGE_HOST_WAIT_TICKS     100u
 
 /** 自检阶段：失败时 stage 停在出错的那一步 */
 typedef enum {
@@ -96,6 +108,17 @@ bool storage_ready(void);
  *         每个 f_* 调用内部会自己取锁，不需要再加外层锁）。
  */
 FATFS *storage_volume(void);
+
+/**
+ * @brief  主机（PC）动过卡之后，强制重新挂载本地的 FAT 卷
+ * @retval true  重新挂载成功
+ * @retval false 卷没挂过 / 媒体锁超时 / f_mount 失败
+ * @note   通过 USB 暴露这张卡时，PC 对 FAT 的改动只有重新挂载才可见（FatFs 会缓存
+ *         BPB 和 FAT 窗口）。目前 storage 线程自检完就挂起了，这个接口留给后续
+ *         "PC 断开后继续写日志" 之类的功能用，调用方要顺便拿媒体锁——
+ *         本函数内部已经拿了 USB_MSC_MEDIA_LOCK_TIMEOUT 的锁。
+ */
+bool storage_resync(void);
 
 #ifdef __cplusplus
 }
