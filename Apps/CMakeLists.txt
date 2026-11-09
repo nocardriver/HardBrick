@@ -10,12 +10,14 @@ cmake_minimum_required(VERSION 3.22)
 add_subdirectory(gps)
 add_subdirectory(display)
 add_subdirectory(backlight)
+add_subdirectory(storage)
 
 # Export list of application libraries to the parent (top-level) scope
 set(APP_LIBS
     gps
     display
     backlight_app
+    storage
     # Add new application library targets here
     PARENT_SCOPE
 )

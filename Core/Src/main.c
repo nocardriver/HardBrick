@@ -39,6 +39,7 @@
 #include "backlight.h"
 #include "backlight_app.h"
 #include "sdcard.h"
+#include "storage.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -111,6 +112,10 @@ void tx_application_define(void *first_unused_memory){
 
   /* 屏幕背光：KEY_LIGHT 上升沿点亮 3 s */
   backlight_app_init();
+
+  /* 存储应用层：挂载 FAT 卷并做一次读写自检。
+     必须在内核启动后——FatFs 的卷互斥量是 ThreadX 对象 */
+  storage_init();
 }
 /* USER CODE END 0 */
 

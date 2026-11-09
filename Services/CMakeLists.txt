@@ -10,12 +10,14 @@ cmake_minimum_required(VERSION 3.22)
 add_subdirectory(SEGGER_RTT)
 add_subdirectory(threadx)
 add_subdirectory(minmea)
+add_subdirectory(FatFs)
 
 # Export list of service libraries to the parent (top-level) scope
 set(SERVICES_LIBS
     segger_rtt
     threadx
     minmea
+    fatfs
     # Add new service library targets here
     PARENT_SCOPE
 )
