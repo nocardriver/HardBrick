@@ -80,6 +80,41 @@ PC 侧改动过 FAT 之后，固件本地的 `FATFS` 缓存会失效，重新访
 `storage_resync()`（内部 `f_mount(&g_fs, "0:", 1)` 强制重新挂载）。当前 storage 线程
 自检完就挂起，这个接口留给后续"PC 断开后继续写日志"之类的功能。
 
+### 4.1 拔掉 USB 线后的「主机放手」判定
+
+门控不能只看 MSC 类是否激活：**拔线时类不会去激活**。本板 `usb_otg.c` 里
+`vbus_sensing_enable = DISABLE`，OTG 内核拿不到会话结束（SEDET）事件，
+`HAL_PCD_DisconnectCallback()` 不会被调用，`ux_device_stack_disconnect()` 自然也不
+执行，类一直停在"已激活"，`g_host_active` 会一直是 1。
+
+但主机停止发帧 3 ms 后，OTG 会进**挂起**（`HAL_PCD_SuspendCallback`）。ST 的 DCD 把
+这个事件转给 `ux_system_slave_change_function`，本工程在 `usb_msc_change_function()`
+里接住并翻译成链路事件：
+
+| 事件 | 触发场景 | 处理 |
+|------|----------|------|
+| `SUSPENDED` | 拔线，或主机 selective suspend | 记时间戳；`usb_msc_media_poll()` 宽限 500 ms 后释放介质 |
+| `RESUMED` | 主机驱动总线恢复（K 状态） | 立刻把门控置回：介质归主机 |
+| `DETACHED` | 需要 VBUS 检测才会出现 | 直接清门控（留给开了 VBUS 检测的板子） |
+
+实测一次"插上再拔掉"：`configure_count` 0→1、`read_count` 增长到 14722（Windows 挂载
+并读卡）、`suspend_events` 0→3；拔线后 RTT 打出
+
+```
+[USB] bus suspended (cable pulled?): TF card released to MCU
+[USB] PC released the card, MCU can use it again
+```
+
+`g_host_active` 归 0、`g_usb_msc.bus_active` 归 0，延迟约 0.5 s。
+
+> **不要用 `DSTS.FNSOF`（SOF 帧号）判断主机是否还在**：这颗核拔线后帧号仍在自增
+> （实测拔线后从 0 涨到 910）。第一版实现用它做看门狗，结果把刚释放的门控又"复原"
+> 成占用，`g_host_active` 停在 1。现在只用挂起/恢复事件。
+
+> 注意：主机 **selective suspend**（端口挂起但线还插着）也会触发同样的释放。因为本
+> 设备上报的是可移动介质（RMB=0x80），Windows 不会对它做激进写缓存；恢复后重新枚举/
+> 重新读 FAT 即可。MCU 侧恢复后要继续用卡，先调 `storage_resync()`。
+
 ## 5. 关键坑：OTG FIFO 必须由应用分配
 
 `HAL_PCD_Init()` 里的 `USB_DevInit()` 会把 `DIEPTXF0..n` **全部清零**，HAL 不会自动给
@@ -134,6 +169,8 @@ HAL_PCDEx_SetTxFiFo(&hpcd_USB_OTG_FS, 1, 64 / 2);   /* EP1 IN：32 字 */
 | `read_count` / `write_count` | PC 实际读写的扇区数 |
 | `read_errors` / `write_errors` | 块传输失败次数 |
 | `media_busy` | 抢媒体锁超时次数（正常应为 0） |
+| `bus_active` | 1 = 主机正在总线上；**拔线后 ~0.5 s 变 0** |
+| `suspend_events` | OTG 报挂起的次数（拔线、主机 selective suspend 各 +1） |
 
 ## 8. 已知限制
 

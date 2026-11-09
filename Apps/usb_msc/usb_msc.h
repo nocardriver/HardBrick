@@ -88,6 +88,16 @@ extern "C" {
  */
 #define USB_MSC_MEDIA_LOCK_SHORT      50u
 
+/**
+ * 判定「主机已放手」所需的宽限时间（ms）
+ * @note 本板 usb_otg.c 里 vbus_sensing_enable = DISABLE，拔线时拿不到 SEDET 掉线
+ *       事件（类不会去激活），但 OTG 会在主机停止发 SOF 后报**挂起**——实测一次
+ *       "插上再拔掉"里 suspend 事件确实来了。usb_msc_media_poll() 收到挂起后等
+ *       这么久再释放介质，避免把一次短暂空闲当成拔线。
+ *       主机恢复（RESUMED）会立刻把门控重新置位。
+ */
+#define USB_MSC_BUS_IDLE_RELEASE_MS   500u
+
 /*---------------------------------------------------------------------------*/
 /* 诊断                                                                      */
 /*---------------------------------------------------------------------------*/
@@ -118,6 +128,8 @@ typedef struct {
   uint32_t read_errors;            /**< 读失败次数 */
   uint32_t write_errors;           /**< 写失败次数 */
   uint32_t media_busy;             /**< 取媒体锁超时次数 */
+  uint32_t suspend_events;         /**< 总线挂起事件计数（拔线/主机 selective suspend） */
+  uint32_t bus_active;             /**< 1 = 主机正在总线上（类激活且未挂起） */
 } usb_msc_status_t;
 
 /** 诊断快照，可以用 J-Link 直接读内存，不依赖 RTT */

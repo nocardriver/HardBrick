@@ -41,8 +41,10 @@
 /** 重新枚举事件位 */
 #define USB_MSC_EVT_RECONNECT       0x01u
 
-/** 线程空闲等待上限（tick）：5 s 检查一次卡片 */
-#define USB_MSC_POLL_TICKS          500u
+/** 线程空闲等待上限（tick）：200 ms 一轮，用于总线挂起/卡片状态检测。
+    @note 挂起释放靠这一轮询把"主机已不在总线"翻译成门控：OTG 中断只置标志，
+    真正的判定（宽限期）在 usb_msc_media_poll() 里做。 */
+#define USB_MSC_POLL_TICKS          20u
 
 /** 本线程栈（静态分配，.bss） */
 static uint8_t g_thread_stack[USB_MSC_THREAD_STACK_SIZE] __attribute__((aligned(8)));
@@ -93,6 +95,40 @@ static void link_detach(void)
 }
 
 /**
+ * @brief  USBX 设备状态变化回调（由 ST DCD 在 OTG 中断里调用）
+ * @param  event ST DCD 事件码（UX_DCD_STM32_DEVICE_xxx），另外初始化完成时会收到
+ *               UX_DEVICE_ATTACHED
+ * @retval UX_SUCCESS
+ * @note   中断上下文：只把事件翻译成链路标志，具体判定在 usb_msc 线程里做。
+ */
+static UINT usb_msc_change_function(ULONG event)
+{
+  switch (event) {
+    case UX_DCD_STM32_DEVICE_SUSPENDED:
+      /* 主机停止发 SOF：拔线，或者主机把端口挂起（selective suspend） */
+      usb_msc_media_on_link_event(USB_MSC_LINK_SUSPENDED);
+      break;
+
+    case UX_DCD_STM32_DEVICE_RESUMED:
+      /* 只有主机真正驱动总线恢复（K 状态）才会来；CONNECT 事件不可靠，
+         不用它重新置位门控，否则拔线后可能被一个假事件复原 */
+      usb_msc_media_on_link_event(USB_MSC_LINK_RESUMED);
+      break;
+
+    case UX_DCD_STM32_DEVICE_DISCONNECTED:
+      usb_msc_media_on_link_event(USB_MSC_LINK_DETACHED);
+      break;
+
+    default:
+      /* UX_DEVICE_ATTACHED / UX_DCD_STM32_DEVICE_CONNECTED 等：枚举流程里
+         SET_CONFIGURATION 会走类激活把门控置位，这里不处理 */
+      break;
+  }
+
+  return UX_SUCCESS;
+}
+
+/**
  * @brief  初始化 USBX 设备栈并接入总线
  * @retval true  设备已接入
  * @retval false  初始化失败，g_usb_msc.stage 指出失败在哪一步
@@ -115,12 +151,13 @@ static bool usb_msc_stack_start(void)
   usb_msc_descriptors_strings(&strings, &strings_length, &language_id,
                               &language_id_length);
 
-  /* 全速设备：高速框架传 NULL/0（U575 的 OTG_FS 最高 12 Mbps） */
+  /* 全速设备：高速框架传 NULL/0（U575 的 OTG_FS 最高 12 Mbps）。
+     最后一个参数是设备状态变化回调：拔线/挂起/恢复靠它上报（见函数实现）。 */
   if (ux_device_stack_initialize(UX_NULL, 0u,
                                  framework, framework_length,
                                  strings, strings_length,
                                  language_id, language_id_length,
-                                 UX_NULL) != UX_SUCCESS) {
+                                 usb_msc_change_function) != UX_SUCCESS) {
     g_usb_msc.stage = (uint32_t)USB_MSC_STAGE_STACK_FAIL;
     return false;
   }

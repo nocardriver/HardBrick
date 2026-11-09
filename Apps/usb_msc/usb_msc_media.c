@@ -65,7 +65,22 @@
 static TX_MUTEX g_media_mutex;
 static bool     g_mutex_ready;
 
-/** 主机是否已枚举并配置（由类激活/去激活回调维护） */
+/* 下面四个标志在 OTG 中断和 usb_msc 线程之间共享：都是单字节/单字写，
+   读的一方允许看到旧值（下一轮 poll 会纠正），不需要临界区。 */
+
+/** MSC 类已激活（主机 SET_CONFIGURATION 成功） */
+static volatile bool g_class_active;
+
+/** 总线挂起：主机 3 ms 没发 SOF。拔线和主机 selective suspend 都是这个现象 */
+static volatile bool g_bus_suspended;
+
+/** 进入挂起状态的时间戳（tick），用来做释放前的宽限 */
+static volatile uint32_t g_suspend_tick;
+
+/** 挂起事件累计次数，供 J-Link 观察（复制进 g_usb_msc） */
+static volatile uint32_t g_suspend_events;
+
+/** 主机是否正在占用介质（对外的门控值，= 类激活 && 总线没挂起） */
 static volatile bool g_host_active;
 
 /** 卡容量缓存：0 表示当时没读到卡 */
@@ -167,6 +182,44 @@ bool usb_msc_host_active(void)
   return g_host_active;
 }
 
+bool usb_msc_media_bus_active(void)
+{
+  return g_host_active;
+}
+
+void usb_msc_media_on_link_event(usb_msc_link_event_t event)
+{
+  /* 中断上下文：只改标志，不打印、不加锁 */
+  switch (event) {
+    case USB_MSC_LINK_SUSPENDED:
+      g_bus_suspended = true;
+      g_suspend_tick = tx_time_get();
+      g_suspend_events++;
+      break;
+
+    case USB_MSC_LINK_RESUMED:
+    case USB_MSC_LINK_ATTACHED:
+      g_bus_suspended = false;
+      /* 主机重新发帧了：只要类还激活，介质立刻回到主机手里
+         （ATTACHED 时类通常还没激活，这里由 g_class_active 兜住） */
+      if (g_class_active) {
+        g_host_active = true;
+      }
+      break;
+
+    case USB_MSC_LINK_DETACHED:
+      /* 需要 VBUS 检测才会出现（本板 usb_otg.c 里 vbus_sensing_enable=DISABLE），
+         真出现了就当掉线处理 */
+      g_bus_suspended = false;
+      g_class_active = false;
+      g_host_active = false;
+      break;
+
+    default:
+      break;
+  }
+}
+
 /*---------------------------------------------------------------------------*/
 /* MSC 类回调                                                                */
 /*---------------------------------------------------------------------------*/
@@ -178,6 +231,8 @@ static VOID media_activate(VOID *storage_instance)
 {
   UX_PARAMETER_NOT_USED(storage_instance);
 
+  g_class_active = true;
+  g_bus_suspended = false;
   g_host_active = true;
   g_usb_msc.configure_count++;
 
@@ -202,6 +257,7 @@ static VOID media_deactivate(VOID *storage_instance)
 {
   UX_PARAMETER_NOT_USED(storage_instance);
 
+  g_class_active = false;
   g_host_active = false;
   g_usb_msc.deconfigure_count++;
 }
@@ -460,7 +516,24 @@ void usb_msc_media_poll(void)
 {
   bool ready;
 
-  /* 主机占用状态变化时才打印，避免刷屏 */
+  /* 1. 主机还在不在总线上：靠 OTG 的挂起事件（USB_MSC_LINK_SUSPENDED）。
+     实测（32 GB 卡 + Windows）：插着时枚举/读写正常；拔线后 OTG 报挂起
+     （suspend_events 递增），宽限 USB_MSC_BUS_IDLE_RELEASE_MS 后把介质还给固件；
+     重新插上/主机恢复发帧会收到 RESUMED/CONNECTED，门控立刻置回。
+     @note 不要用 DSTS.FNSOF 判断：这颗核拔线后帧号仍在自增（实测拔线后仍从
+     0 涨到 910），拿它当"主机活着"的证据会把刚释放的门控又复原。 */
+  if (g_class_active && g_bus_suspended && g_host_active &&
+      ((tx_time_get() - g_suspend_tick) >= UX_MS_TO_TICK(USB_MSC_BUS_IDLE_RELEASE_MS))) {
+    g_host_active = false;
+    SEGGER_RTT_WriteString(0,
+        "[USB] bus suspended (cable pulled?): TF card released to MCU\r\n");
+  }
+
+  /* 2. 诊断快照：J-Link 直接读 g_usb_msc 就能看出主机还在不在 */
+  g_usb_msc.bus_active = g_host_active ? 1u : 0u;
+  g_usb_msc.suspend_events = g_suspend_events;
+
+  /* 3. 占用状态变化时才打印，避免刷屏 */
   if (g_logged_host_active != g_host_active) {
     g_logged_host_active = g_host_active;
     SEGGER_RTT_printf(0, "[USB] %s\r\n",
@@ -468,7 +541,7 @@ void usb_msc_media_poll(void)
                                     : "PC released the card, MCU can use it again");
   }
 
-  /* 主机在用卡时不去动 SD 命令；空闲时才检查卡是否还在 */
+  /* 4. 主机在用卡时不去动 SD 命令；空闲时才检查卡是否还在 */
   if (g_host_active) {
     return;
   }
