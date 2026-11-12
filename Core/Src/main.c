@@ -41,6 +41,8 @@
 #include "sdcard.h"
 #include "storage.h"
 #include "usb_msc.h"
+#include "e22.h"
+#include "e22_port.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -64,6 +66,10 @@
 TX_THREAD my_thread;
 /* 线程栈：静态分配放 .bss，由链接器核算总量（溢出在链接期报错）；Cortex-M 栈需 8 字节对齐 */
 static uint8_t my_thread_stack[1024] __attribute__((aligned(8)));
+
+/* LoRa（E22-400T22S）：接收环形缓冲必须是 2 的幂，满时驱动丢弃新数据 */
+static uint8_t g_lora_rx_ring[1024];
+static e22_t   g_lora;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -86,6 +92,113 @@ void my_thread_entry(ULONG thread_input){
     // SEGGER_RTT_WriteString(0, "threadx working\r\n");
     /* Sleep for 1 second. */
     tx_thread_sleep(100);
+  }
+}
+
+/* ---- LoRa(E22-400T22S) 上电自检：打印模块型号/固件/参数，便于上板确认 ---- */
+
+static const char *lora_baud_str(e22_uart_baud_t baud)
+{
+  switch (baud) {
+  case E22_UART_BAUD_1200:   return "1200";
+  case E22_UART_BAUD_2400:   return "2400";
+  case E22_UART_BAUD_4800:   return "4800";
+  case E22_UART_BAUD_9600:   return "9600";
+  case E22_UART_BAUD_19200:  return "19200";
+  case E22_UART_BAUD_38400:  return "38400";
+  case E22_UART_BAUD_57600:  return "57600";
+  case E22_UART_BAUD_115200: return "115200";
+  default:                   return "?";
+  }
+}
+
+static const char *lora_parity_str(e22_uart_parity_t parity)
+{
+  switch (parity) {
+  case E22_UART_PARITY_8N1: return "8N1";
+  case E22_UART_PARITY_8O1: return "8O1";
+  case E22_UART_PARITY_8E1: return "8E1";
+  default:                  return "?";
+  }
+}
+
+static uint32_t lora_air_bps(e22_air_rate_t rate)
+{
+  switch (rate) {
+  case E22_AIR_RATE_4K8:  return 4800u;
+  case E22_AIR_RATE_9K6:  return 9600u;
+  case E22_AIR_RATE_19K2: return 19200u;
+  case E22_AIR_RATE_38K4: return 38400u;
+  case E22_AIR_RATE_62K5: return 62500u;
+  case E22_AIR_RATE_2K4:
+  default:                return 2400u;
+  }
+}
+
+static uint8_t lora_power_dbm(e22_tx_power_t power)
+{
+  static const uint8_t table[4] = {22u, 17u, 14u, 10u};
+
+  return table[(unsigned)power & 0x03u];
+}
+
+static void lora_selftest(void)
+{
+  static const uint16_t packet_bytes[4] = {240u, 128u, 64u, 32u};
+  e22_cfg_t cfg = {
+    .rx_ring = g_lora_rx_ring,
+    .rx_ring_size = (uint16_t)sizeof(g_lora_rx_ring),
+    .aux_cb = NULL,
+    .user = NULL,
+  };
+  e22_params_t params;
+  uint8_t pid[E22_PID_LEN];
+  char type[24];
+  char fw[24];
+  e22_status_t st;
+
+  st = e22_init(&g_lora, &cfg);
+  if (st != E22_OK) {
+    SEGGER_RTT_printf(0, "[LORA] init failed: st=%d aux_busy=%u\r\n",
+                      (int)st, (unsigned)e22_is_busy(&g_lora));
+    return;
+  }
+  SEGGER_RTT_WriteString(0, "[LORA] init ok\r\n");
+
+  if (e22_at_query(&g_lora, "AT+DEVTYPE=?", "DEVTYPE=", type, sizeof(type), 300u) != E22_OK) {
+    type[0] = '?';
+    type[1] = '\0';
+  }
+  if (e22_at_query(&g_lora, "AT+FWCODE=?", "FWCODE=", fw, sizeof(fw), 300u) != E22_OK) {
+    fw[0] = '?';
+    fw[1] = '\0';
+  }
+  SEGGER_RTT_printf(0, "[LORA] type=%s fw=%s\r\n", type, fw);
+
+  if (e22_read_pid(&g_lora, pid) == E22_OK) {
+    SEGGER_RTT_printf(0, "[LORA] pid=%02X%02X%02X%02X%02X%02X%02X\r\n",
+                      pid[0], pid[1], pid[2], pid[3], pid[4], pid[5], pid[6]);
+  }
+
+  if (e22_read_params(&g_lora, &params) == E22_OK) {
+    SEGGER_RTT_printf(0, "[LORA] addr=0x%04X netid=%u ch=%u (%u.125MHz) air=%u bps\r\n",
+                      (unsigned)params.address, (unsigned)params.netid,
+                      (unsigned)params.channel, (unsigned)(410u + params.channel),
+                      (unsigned)lora_air_bps(params.air_rate));
+    SEGGER_RTT_printf(0, "[LORA] uart=%s %s pkt=%u B pwr=%u dBm fixed=%u lbt=%u relay=%u\r\n",
+                      lora_baud_str(params.uart_baud),
+                      lora_parity_str(params.uart_parity),
+                      (unsigned)packet_bytes[(unsigned)params.packet_len & 0x03u],
+                      (unsigned)lora_power_dbm(params.tx_power),
+                      (unsigned)params.fixed_tx, (unsigned)params.lbt,
+                      (unsigned)params.relay);
+    SEGGER_RTT_printf(0, "[LORA] wor_role=%u period=%u ms rssi_env=%u rssi_byte=%u soft=%u\r\n",
+                      (unsigned)params.wor_role,
+                      (unsigned)(((unsigned)params.wor_period + 1u) * 500u),
+                      (unsigned)params.rssi_env, (unsigned)params.rssi_byte,
+                      (unsigned)params.soft_mode);
+  } else {
+    SEGGER_RTT_WriteString(0, "[LORA] read params failed\r\n");
   }
 }
 
@@ -219,6 +332,8 @@ int main(void)
   }
   // LC760Z初始化
   LC760Z_init();
+  // LoRa(E22-400T22S)初始化 + 上电自检（型号/固件/参数打印到 RTT）
+  lora_selftest();
 
   // start threadx kernel
   tx_kernel_enter();
@@ -302,6 +417,17 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin){
     /* ISR 只发事件：点亮与 3 s 计时都在 backlight 线程里做 */
     backlight_app_button_isr();
   }
+  else if(GPIO_Pin == LORA_AUX_Pin){
+    /* AUX 上升沿 = 模块回到空闲 */
+    e22_port_aux_isr();
+  }
+}
+
+void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin){
+  if(GPIO_Pin == LORA_AUX_Pin){
+    /* AUX 下降沿 = 模块开始忙（收包前 / 发包 / 切模式） */
+    e22_port_aux_isr();
+  }
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
@@ -316,12 +442,23 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
     gps_rx_push(LC760Z_rx_data, Size);
     LC760Z_uart_start_receive();
   }
+  else if(huart->Instance == LPUART1){
+    /* ISR 只把本次 burst 拷进 LoRa 环形缓冲并 rearm */
+    if(HAL_UARTEx_GetRxEventType(huart) == HAL_UART_RXEVENT_HT){
+      return;
+    }
+    e22_port_rx_event(Size);
+  }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart){
   if(huart->Instance == USART2){
     /* TODO: 如果重启接收失败将永远关闭接收，待后续完善 */
     LC760Z_uart_start_receive();
+  }
+  else if(huart->Instance == LPUART1){
+    /* ORE/帧错误：复位接收并 rearm，最多毁掉当前一包 */
+    e22_port_uart_error();
   }
 }
 /* USER CODE END 4 */

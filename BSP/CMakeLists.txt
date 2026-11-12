@@ -12,6 +12,7 @@ add_subdirectory(ILI9341)
 add_subdirectory(Backlight)
 add_subdirectory(SDCard)
 add_subdirectory(USBConnect)
+add_subdirectory(E22)
 
 # Export list of BSP libraries to the parent (top-level) scope
 set(BSP_LIBS
@@ -20,6 +21,7 @@ set(BSP_LIBS
     backlight
     sdcard
     usb_connect
+    e22
     # Add new BSP library targets here
     PARENT_SCOPE
 )

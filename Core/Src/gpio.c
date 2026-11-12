@@ -88,7 +88,7 @@ void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : LORA_AUX_Pin */
   GPIO_InitStruct.Pin = LORA_AUX_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(LORA_AUX_GPIO_Port, &GPIO_InitStruct);
 
