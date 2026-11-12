@@ -53,10 +53,11 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(DIS_DC_GPIO_Port, DIS_DC_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, DIS_DC_Pin|LORA_M0_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, DIS_RST_Pin|PW_EN_Pin|GPS_NRST_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DIS_RST_Pin|LORA_NRST_Pin|LORA_M1_Pin|PW_EN_Pin
+                          |GPS_NRST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : KEY_LIGHT_Pin */
   GPIO_InitStruct.Pin = KEY_LIGHT_Pin;
@@ -78,12 +79,25 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(DIS_DC_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : DIS_RST_Pin */
-  GPIO_InitStruct.Pin = DIS_RST_Pin;
+  /*Configure GPIO pins : DIS_RST_Pin LORA_NRST_Pin LORA_M1_Pin */
+  GPIO_InitStruct.Pin = DIS_RST_Pin|LORA_NRST_Pin|LORA_M1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(DIS_RST_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : LORA_AUX_Pin */
+  GPIO_InitStruct.Pin = LORA_AUX_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(LORA_AUX_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : LORA_M0_Pin */
+  GPIO_InitStruct.Pin = LORA_M0_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LORA_M0_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SDMMC_CD_Pin */
   GPIO_InitStruct.Pin = SDMMC_CD_Pin;
@@ -104,6 +118,9 @@ void MX_GPIO_Init(void)
 
   HAL_NVIC_SetPriority(EXTI7_IRQn, 10, 0);
   HAL_NVIC_EnableIRQ(EXTI7_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI10_IRQn);
 
 }
 

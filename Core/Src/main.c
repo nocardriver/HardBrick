@@ -21,10 +21,10 @@
 #include "dcache.h"
 #include "gpdma.h"
 #include "icache.h"
+#include "usart.h"
 #include "sdmmc.h"
 #include "spi.h"
 #include "tim.h"
-#include "usart.h"
 #include "usb_otg.h"
 #include "gpio.h"
 
@@ -161,6 +161,7 @@ int main(void)
   MX_TIM17_Init();
   MX_SDMMC1_SD_Init();
   MX_USB_OTG_FS_PCD_Init();
+  MX_LPUART1_UART_Init();
   /* USER CODE BEGIN 2 */
   /* 模拟 USB 拔出：OTG 软断开（DCTL.SDIS=1）并把 D+ (PA12) 拉成 GPIO 输出低，
      主机立刻判定设备已拔出。等 USBX 设备栈就绪后由 usb_msc 线程把 D+ 交还给
@@ -250,9 +251,16 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
+  /** Configure LSE Drive Capability
+  */
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+
   /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48|RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48|RCC_OSCILLATORTYPE_HSI
+                              |RCC_OSCILLATORTYPE_LSE;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;

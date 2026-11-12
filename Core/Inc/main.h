@@ -66,6 +66,15 @@ void Error_Handler(void);
 #define DIS_DC_GPIO_Port GPIOC
 #define DIS_RST_Pin GPIO_PIN_0
 #define DIS_RST_GPIO_Port GPIOB
+#define LORA_NRST_Pin GPIO_PIN_2
+#define LORA_NRST_GPIO_Port GPIOB
+#define LORA_AUX_Pin GPIO_PIN_10
+#define LORA_AUX_GPIO_Port GPIOB
+#define LORA_AUX_EXTI_IRQn EXTI10_IRQn
+#define LORA_M1_Pin GPIO_PIN_15
+#define LORA_M1_GPIO_Port GPIOB
+#define LORA_M0_Pin GPIO_PIN_6
+#define LORA_M0_GPIO_Port GPIOC
 #define SDMMC_CD_Pin GPIO_PIN_7
 #define SDMMC_CD_GPIO_Port GPIOC
 #define SDMMC_CD_EXTI_IRQn EXTI7_IRQn
