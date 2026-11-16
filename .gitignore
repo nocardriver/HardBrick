@@ -122,3 +122,6 @@ pip-wheel-metadata/
 *.tmp
 *.temp
 *.cache
+
+# AI 调试临时目录（J-Link dump / 分析脚本）
+.dsh-tmp/

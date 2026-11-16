@@ -1,17 +1,27 @@
 /**
  * @file    compass.c
  * @author  YangKY
- * @brief   地磁罗盘应用层实现：25 Hz 采集、硬磁圆拟合标定、航向角计算
+ * @brief   地磁罗盘应用层：25 Hz 采样、3D 球拟合硬磁标定、航向角计算
  *
- * 为什么用 atan2f/sqrtf 而不是自己写整数 CORDIC：本板 Cortex-M33 配了单精度
- * FPU（编译选项 -mfpu=fpv5-sp-d16 -mfloat-abi=hard，SystemInit 里已打开 CPACR），
- * 25 Hz 下每周期两次浮点运算的开销可以忽略；RTT 打印仍然只用整数（不支持 %f）。
+ * 为什么用 atan2f/sqrtf：本板 Cortex-M33 配了单精度 FPU（-mfpu=fpv5-sp-d16
+ * -mfloat-abi=hard，SystemInit 已开 CPACR），25 Hz 下每周期两次浮点运算的开销
+ * 可以忽略；RTT 打印仍然只用整数（不支持 %f）。
  *
- * 标定为什么用圆拟合而不是 min/max 中点：只转一小段角度时，min/max 的"中点"
- * 并不等于圆心。实测在 50° 的圆弧上取中点会得到 216 mG 的假零偏，|H| 从 465 mG
- * 掉到 223 mG，航向角整体歪掉且随角度变化。这里改成对最近 256 个样本做 Kåsa
- * 圆拟合：圆心 = 硬磁零偏、半径 = 水平场强、残差 RMS = 圆度；只有"覆盖 12 个
- * 30° 扇区里的 10 个以上 + 半径/残差/零偏都合理"时才采纳，转不够就保持未标定。
+ * 标定模型（teslabs / Li & Griffiths 2004）：h_m = A·h + b。把 A 当成各轴增益
+ * 的近似缩放、忽略非正交项，测量点就落在一个球上，球的**球心就是硬磁零偏 b**、
+ * 半径就是当地总场强 |B|。只要采集到的手部姿态在三维上分布足够（画 8 字、来回
+ * 翻滚），球就唯一确定；这与"必须水平转一整圈"的 2D 圆拟合相比，正是手机那种
+ * "随便晃几下就能标定"的做法。
+ *
+ * 历史教训（实测数据，别再走回头路）：
+ *   - min/max 中点：只转 50° 就触发，得到 216 mG 假零偏，|H| 从 465 掉到 223；
+ *   - 2D 圆拟合：转轴不竖直时 xy 轨迹是椭圆，半径被压到 125~193（真实水平分量
+ *     362），圆心也偏，所以加了"Z 轴跨度 ≤60 mG"的门限；
+ *   - 但手转很难保持水平，于是改成 3D 球拟合 + 三维分布（协方差特征值比）门限：
+ *     板子怎么翻都行，只要姿态覆盖够。
+ *
+ * 软磁（各轴增益不等）本层不修正，误差通常在几度量级；需要更准就上 IMU 做倾角
+ * 补偿 + 完整椭球拟合（A 的矩阵平方根）。
  */
 
 #include "compass.h"
@@ -32,38 +42,37 @@
 /** 弧度 → 0.1° 的换算系数 */
 #define COMPASS_RAD_TO_DEG10 (1800.0f / 3.14159265f)
 
-/** 标定窗口：25 Hz 下 512 个样本约 20 s，够慢慢转一整圈，也便于事后回溯点云 */
+/** 标定窗口：25 Hz 下 512 个样本约 20 s，够画十几秒的 8 字 */
 #define COMPASS_CALIB_WINDOW 512u
 
-/** 拟合所需的最少样本（2.4 s），太少时 3×3 法方程病态 */
-#define COMPASS_CALIB_MIN_SAMPLES 60u
+/** 拟合所需的最少样本，太少时 4×4 法方程病态 */
+#define COMPASS_CALIB_MIN_SAMPLES 120u
 
-/** 12 个 30° 扇区里至少覆盖多少个才算"转够一圈"；10 个 = 300° */
+/** 12 个 30° 扇区里 xy 投影至少覆盖多少个（航向只用 x/y，必须转遍平面） */
 #define COMPASS_CALIB_MIN_BINS 10u
 
-/** 拟合半径（水平场强）的合理区间，mG；上海约 350~370，留宽一点防误判 */
-#define COMPASS_CALIB_RADIUS_MIN 100
-#define COMPASS_CALIB_RADIUS_MAX 1000
+/** 拟合球半径（= 当地总场强）的合理区间，mG；地球 25000~65000 nT 即 250~650 mg */
+#define COMPASS_FIELD_MIN_MG 250
+#define COMPASS_FIELD_MAX_MG 750
 
-/** 拟合残差 RMS 上限，mG；超过说明软磁/倾斜让点云不是圆 */
-#define COMPASS_CALIB_RMS_MAX 15
+/** 拟合残差 RMS 上限，mG；超过说明点云不是球（软磁强 / 有外部干扰） */
+#define COMPASS_CALIB_RMS_MAX 8
+
+/**
+ * 三维分布门限：样本协方差的最小/最大特征值之比（×1000 存进快照）。
+ * 只在一个平面里转时最小特征值≈0（比值≈0），球心沿该平面法向不唯一，
+ * 标定结果不可信；真正翻滚过的数据比值通常 >0.3。
+ */
+#define COMPASS_CALIB_MIN_SPREAD_PM 150u
 
 /** 零偏绝对值上限，mG；超过基本都是拟合发散 */
 #define COMPASS_CALIB_OFFSET_MAX 1500
 
 /**
- * 标定期间 Z 轴允许的跨度，mG。
- * 绕竖直轴转时（哪怕板子本身是斜的），地磁的竖直分量不变、xy 轨迹仍是正圆，
- * 标定依然有效；但手持旋转常常边转边上下翻，z 大范围变化会让 xy 轨迹被压扁，
- * 拟合出的半径和圆心都不对（实测手持转一圈 z 跨度 158 mG，半径被压到 193，
- * 而真实水平分量约 340）。超过这个门限就拒绝采纳。
- */
-#define COMPASS_CALIB_Z_SPAN_MAX 60
-
-/**
- * Y 轴符号：芯片 Z 轴朝上（顶面朝上）且 X-Y-Z 右手系时，航向角 = atan2(+y, x)；
- * 模块把芯片贴在板子背面（Z 朝下）时同一旋转方向下航向会整体反向，要取负。
- * 判定：从上往下看把板子顺时针转 90°，hdg 应增加约 90°；若减少约 90° 就改成 1。
+ * Y 轴符号：实测平放（板子水平贴在桌面上）时 Z 读到 +350 mG 左右，
+ * 而地磁竖直分量在北半球是向下的——说明传感器 +Z 指向桌面向下，
+ * 于是 X→Y 从板子正面看是顺时针，航向角 = atan2(-y, x)。
+ * 若换板子/Z 轴朝向不同，把这里改 0 即可。
  */
 #define COMPASS_Y_INVERT 1
 
@@ -79,7 +88,7 @@ static uint8_t g_stack[COMPASS_THREAD_STACK_SIZE] __attribute__((aligned(8)));
 static TX_MUTEX g_lock;
 static compass_snapshot_t g_snap;
 
-/** 标定窗口（环形）：既用来拟合，也可以在调试时用 J-Link 整块读出来看点云 */
+/** 标定窗口（环形）：拟合数据源，调试时也可用 J-Link 整块读出来看点云 */
 static compass_point_t g_window[COMPASS_CALIB_WINDOW];
 static uint32_t g_window_pos;   /**< 下一个写入位置 */
 static uint32_t g_window_count; /**< 已填样本数，封顶 COMPASS_CALIB_WINDOW */
@@ -93,7 +102,7 @@ static volatile bool g_calib_reset_req;
 /** compass_hw_init() 的结果；false 时线程空转（只累计 missed） */
 static bool g_hw_ready;
 
-/** 互斥量是否已创建：compass_get() 在 compass_init() 之前调用时直接返回全零快照 */
+/** 互斥量是否已创建：compass_get() 在 compass_init() 之前调用时返回零快照 */
 static bool g_lock_ready;
 
 static void compass_publish(const compass_snapshot_t *snap)
@@ -104,7 +113,7 @@ static void compass_publish(const compass_snapshot_t *snap)
 }
 
 /*---------------------------------------------------------------------------*/
-/* 三阶线性方程组（Cramer 法则），只给圆拟合用                                */
+/* 线性代数小工具：3×3 行列式、4×4 高斯消元、对称 3×3 特征值                  */
 /*---------------------------------------------------------------------------*/
 
 static double det3(const double m[3][3])
@@ -114,173 +123,249 @@ static double det3(const double m[3][3])
          m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
 }
 
-static bool solve3(const double m[3][3], const double b[3], double out[3])
+/**
+ * @brief 4×4 线性方程组（a·x = b），高斯消元 + 部分主元 + 回代
+ * @note 直接改写传入的 a/b（调用者本来就要传副本）；奇异时返回 false
+ */
+static bool solve4(double a[4][4], double b[4], double x[4])
 {
-  double det = det3(m);
-  double tmp[3][3];
-  uint8_t col;
-  uint8_t row;
+  int i;
+  int j;
+  int k;
+  int piv;
 
-  if (fabs(det) < 1e-6) {
-    return false;
+  for (i = 0; i < 4; i++) {
+    piv = i;
+    for (j = i + 1; j < 4; j++) {
+      if (fabs(a[j][i]) > fabs(a[piv][i])) {
+        piv = j;
+      }
+    }
+    if (fabs(a[piv][i]) < 1e-12) {
+      return false;
+    }
+    if (piv != i) {
+      for (k = 0; k < 4; k++) {
+        double t = a[i][k];
+        a[i][k] = a[piv][k];
+        a[piv][k] = t;
+      }
+      {
+        double t = b[i];
+        b[i] = b[piv];
+        b[piv] = t;
+      }
+    }
+    for (j = i + 1; j < 4; j++) {
+      double f = a[j][i] / a[i][i];
+      for (k = i; k < 4; k++) {
+        a[j][k] -= f * a[i][k];
+      }
+      b[j] -= f * b[i];
+    }
   }
 
-  for (col = 0u; col < 3u; col++) {
-    for (row = 0u; row < 3u; row++) {
-      tmp[row][0] = m[row][0];
-      tmp[row][1] = m[row][1];
-      tmp[row][2] = m[row][2];
-      tmp[row][col] = b[row];
+  for (i = 3; i >= 0; i--) {
+    double s = b[i];
+    for (j = i + 1; j < 4; j++) {
+      s -= a[i][j] * x[j];
     }
-    out[col] = det3(tmp) / det;
+    x[i] = s / a[i][i];
   }
 
   return true;
 }
 
+/** @brief 对称 3×3 矩阵的三个特征值（解析解，按 b 中的顺序乱序返回） */
+static void eig3_sym(const double m[3][3], double e[3])
+{
+  double p1 = m[0][1] * m[0][1] + m[0][2] * m[0][2] + m[1][2] * m[1][2];
+  double q = (m[0][0] + m[1][1] + m[2][2]) / 3.0;
+  double p2 = (m[0][0] - q) * (m[0][0] - q) + (m[1][1] - q) * (m[1][1] - q) +
+              (m[2][2] - q) * (m[2][2] - q) + 2.0 * p1;
+  double p = sqrt(p2 / 6.0);
+  double b[3][3];
+  double r;
+  double phi;
+
+  if (p < 1e-12) {
+    e[0] = e[1] = e[2] = q;
+    return;
+  }
+
+  b[0][0] = (m[0][0] - q) / p;
+  b[0][1] = m[0][1] / p;
+  b[0][2] = m[0][2] / p;
+  b[1][0] = b[0][1];
+  b[1][1] = (m[1][1] - q) / p;
+  b[1][2] = m[1][2] / p;
+  b[2][0] = b[0][2];
+  b[2][1] = b[1][2];
+  b[2][2] = (m[2][2] - q) / p;
+
+  r = det3(b) / 2.0;
+  if (r < -1.0) {
+    r = -1.0;
+  } else if (r > 1.0) {
+    r = 1.0;
+  }
+
+  phi = acos(r) / 3.0;
+  e[0] = q + 2.0 * p * cos(phi);
+  e[2] = q + 2.0 * p * cos(phi + 2.0943951023931953); /* +2π/3 */
+  e[1] = 3.0 * q - e[0] - e[2];
+}
+
 /*---------------------------------------------------------------------------*/
-/* 硬磁标定：对窗口内样本做 Kåsa 圆拟合                                        */
+/* 硬磁标定：三维球拟合（Kåsa 形式，带坐标归一化）                             */
 /*---------------------------------------------------------------------------*/
 
 /**
- * @brief 用窗口内样本拟合圆，返回圆心（硬磁零偏）、半径与质量指标
- * @param cx     输出：圆心 X（零偏），mG
- * @param cy     输出：圆心 Y，mG
- * @param radius 输出：拟合半径（水平场强），mG
+ * @brief 用窗口内样本拟合球，返回球心（硬磁零偏）、半径与质量指标
+ * @param off_x/off_y/off_z 输出：球心，mG
+ * @param radius 输出：球半径（= 当地总场强），mG
  * @param rms    输出：径向残差 RMS，mG
- * @param bins   输出：覆盖到的 30° 扇区数（0~12）
- * @retval true 拟合结果通过全部质量门限，可以采纳
- * @note 模型：x²+y²+Dx+Ey+F=0，即圆心 (-D/2, -E/2)、半径² = (D²+E²)/4 - F；
- *       对 [Sxx Sxy Sx; Sxy Syy Sy; Sx Sy n]·[D E F]ᵀ = -[Σxw Σyw Σw] 求解
- *       （w = x²+y²）。
+ * @param spread_pm 输出：样本协方差最小/最大特征值之比 ×1000
+ * @param bins   输出：xy 投影覆盖到的 30° 扇区数（0~12）
+ * @retval true 通过全部门限，可以采纳
+ * @note 模型 |m - c|² = R² 展开为 m² + D x + E y + F z + G = 0，对
+ *       [D E F G] 线性最小二乘。先把数据减均值、除以标准差再拟合，
+ *       否则 x² 与常数项差 5 个数量级，法方程条件数会烂掉。
  */
-static bool compass_fit(int32_t *cx, int32_t *cy, int32_t *radius, int32_t *rms,
-                        uint16_t *bins, int8_t *rot, int16_t *z_span)
+static bool compass_fit(int32_t *off_x, int32_t *off_y, int32_t *off_z,
+                        int32_t *radius, int32_t *rms, uint16_t *spread_pm,
+                        uint16_t *bins)
 {
   const uint32_t n = g_window_count;
-  double m[3][3];
-  double b[3];
-  double sol[3];
-  double sx = 0.0;
-  double sy = 0.0;
-  double sxx = 0.0;
-  double syy = 0.0;
-  double sxy = 0.0;
-  double sw = 0.0;
-  double sxw = 0.0;
-  double syw = 0.0;
-  double cxd;
-  double cyd;
+  double mx = 0.0;
+  double my = 0.0;
+  double mz = 0.0;
+  double s = 0.0;
+  double a[4][4];
+  double b[4];
+  double x[4];
+  double cx;
+  double cy;
+  double cz;
   double rd;
   double acc = 0.0;
   double rmsd;
-  int16_t zmin = 32767;
-  int16_t zmax = -32768;
+  double cov[3][3];
+  double eig[3];
+  double emax;
+  double emin;
   uint16_t mask = 0u;
   uint32_t i;
+  uint32_t j;
   uint8_t covered = 0u;
 
   if (n < COMPASS_CALIB_MIN_SAMPLES) {
     return false;
   }
 
+  /* 1. 均值与整体尺度（球拟合只用单一尺度，保持球在归一化后仍是球） */
   for (i = 0u; i < n; i++) {
-    double x = (double)g_window[i].x;
-    double y = (double)g_window[i].y;
-    double w = x * x + y * y;
+    mx += (double)g_window[i].x;
+    my += (double)g_window[i].y;
+    mz += (double)g_window[i].z;
+  }
+  mx /= (double)n;
+  my /= (double)n;
+  mz /= (double)n;
 
-    sx += x;
-    sy += y;
-    sxx += x * x;
-    syy += y * y;
-    sxy += x * y;
-    sw += w;
-    sxw += x * w;
-    syw += y * w;
+  for (i = 0u; i < n; i++) {
+    double dx = (double)g_window[i].x - mx;
+    double dy = (double)g_window[i].y - my;
+    double dz = (double)g_window[i].z - mz;
 
-    if (g_window[i].z < zmin) {
-      zmin = g_window[i].z;
-    }
-    if (g_window[i].z > zmax) {
-      zmax = g_window[i].z;
-    }
+    s += dx * dx + dy * dy + dz * dz;
+  }
+  s = sqrt(s / (3.0 * (double)n));
+  if (s < 1.0) {
+    return false; /* 数据几乎不动，没东西可拟合 */
   }
 
-  /* 转的圈里只要板子上下翻过，xy 轨迹就不是正圆，标定结果不可信（门限在末尾统一判） */
-  *z_span = (int16_t)(zmax - zmin);
+  /* 2. 归一化坐标下装配 4×4 法方程：[u²+v²+w²] + D u + E v + F w + G = 0 */
+  for (i = 0u; i < 4u; i++) {
+    b[i] = 0.0;
+    for (j = 0u; j < 4u; j++) {
+      a[i][j] = 0.0;
+    }
+  }
+  for (i = 0u; i < 3u; i++) {
+    cov[i][0] = 0.0;
+    cov[i][1] = 0.0;
+    cov[i][2] = 0.0;
+  }
 
-  m[0][0] = sxx; m[0][1] = sxy; m[0][2] = sx;
-  m[1][0] = sxy; m[1][1] = syy; m[1][2] = sy;
-  m[2][0] = sx;  m[2][1] = sy;  m[2][2] = (double)n;
-  b[0] = -sxw;
-  b[1] = -syw;
-  b[2] = -sw;
+  for (i = 0u; i < n; i++) {
+    double u = ((double)g_window[i].x - mx) / s;
+    double v = ((double)g_window[i].y - my) / s;
+    double w = ((double)g_window[i].z - mz) / s;
+    double row[4];
+    double rhs = -(u * u + v * v + w * w);
+    uint32_t r;
+    uint32_t c;
 
-  if (!solve3(m, b, sol)) {
+    row[0] = u;
+    row[1] = v;
+    row[2] = w;
+    row[3] = 1.0;
+
+    for (r = 0u; r < 4u; r++) {
+      b[r] += row[r] * rhs;
+      for (c = 0u; c < 4u; c++) {
+        a[r][c] += row[r] * row[c];
+      }
+    }
+
+    /* 同时累计协方差（判断三维分布是否够，而不是只在一个平面里转） */
+    cov[0][0] += u * u;
+    cov[1][1] += v * v;
+    cov[2][2] += w * w;
+    cov[0][1] += u * v;
+    cov[1][2] += v * w;
+    cov[0][2] += u * w;
+  }
+
+  if (!solve4(a, b, x)) {
     return false;
   }
 
-  cxd = -sol[0] * 0.5;
-  cyd = -sol[1] * 0.5;
-
+  /* 3. 还原到物理量：球心与半径 */
+  cx = -x[0] * 0.5;
+  cy = -x[1] * 0.5;
+  cz = -x[2] * 0.5;
   {
-    double r2 = cxd * cxd + cyd * cyd - sol[2];
+    double r2 = cx * cx + cy * cy + cz * cz - x[3];
 
     if (!(r2 > 0.0)) {
       return false;
     }
-    rd = sqrt(r2);
+    rd = sqrt(r2) * s;
   }
 
-  if ((rd < (double)COMPASS_CALIB_RADIUS_MIN) ||
-      (rd > (double)COMPASS_CALIB_RADIUS_MAX)) {
-    return false;
-  }
-  if ((fabs(cxd) > (double)COMPASS_CALIB_OFFSET_MAX) ||
-      (fabs(cyd) > (double)COMPASS_CALIB_OFFSET_MAX)) {
-    return false;
-  }
+  cx = cx * s + mx;
+  cy = cy * s + my;
+  cz = cz * s + mz;
 
-  /* 第二遍：残差 + 角度覆盖率 + 旋转方向（按时间顺序算有向面积）。
-     有向面积 >0 表示磁场矢量在传感器坐标系里逆时针转，也就是板子顺时针转
-     （Z 轴朝上时）——用来判定 COMPASS_Y_INVERT 该取哪一个。 */
-  {
-    const uint32_t start = (n == COMPASS_CALIB_WINDOW) ? g_window_pos : 0u;
-    uint32_t prev = 0u;
-    double area = 0.0;
+  /* 4. 残差、xy 覆盖、三维分布 */
+  for (i = 0u; i < n; i++) {
+    double dx = (double)g_window[i].x - cx;
+    double dy = (double)g_window[i].y - cy;
+    double dz = (double)g_window[i].z - cz;
+    double err = sqrt(dx * dx + dy * dy + dz * dz) - rd;
+    double ang = atan2(dy, dx);
+    int bin = (int)((ang + 3.14159265) * (12.0 / 6.28318531));
 
-    for (i = 0u; i < n; i++) {
-      uint32_t idx = (start + i) % COMPASS_CALIB_WINDOW;
-      double dx = (double)g_window[idx].x - cxd;
-      double dy = (double)g_window[idx].y - cyd;
-      double err = sqrt(dx * dx + dy * dy) - rd;
-      double ang = atan2(dy, dx);
-      int bin = (int)((ang + 3.14159265) * (12.0 / 6.28318531));
+    acc += err * err;
 
-      acc += err * err;
-
-      if (bin < 0) {
-        bin = 0;
-      } else if (bin > 11) {
-        bin = 11;
-      }
-      mask = (uint16_t)(mask | (uint16_t)(1u << (unsigned)bin));
-
-      if (i > 0u) {
-        double px = (double)g_window[prev].x - cxd;
-        double py = (double)g_window[prev].y - cyd;
-
-        area += px * dy - py * dx;
-      }
-      prev = idx;
+    if (bin < 0) {
+      bin = 0;
+    } else if (bin > 11) {
+      bin = 11;
     }
-
-    /* 总转角不到约 11° 时面积没有意义，直接报 0 */
-    if (fabs(area) < 0.2 * rd * rd) {
-      *rot = 0;
-    } else {
-      *rot = (area > 0.0) ? 1 : -1;
-    }
+    mask = (uint16_t)(mask | (uint16_t)(1u << (unsigned)bin));
   }
 
   rmsd = sqrt(acc / (double)n);
@@ -291,16 +376,48 @@ static bool compass_fit(int32_t *cx, int32_t *cy, int32_t *radius, int32_t *rms,
     }
   }
 
-  /* 先把诊断量填出去：即使门限不过，调用者也能从 RTT/J-Link 看到"差在哪一项" */
-  *cx = (int32_t)cxd;
-  *cy = (int32_t)cyd;
+  cov[0][0] /= (double)n;
+  cov[1][1] /= (double)n;
+  cov[2][2] /= (double)n;
+  cov[0][1] /= (double)n;
+  cov[1][2] /= (double)n;
+  cov[0][2] /= (double)n;
+  cov[1][0] = cov[0][1];
+  cov[2][1] = cov[1][2];
+  cov[2][0] = cov[0][2];
+
+  eig3_sym(cov, eig);
+  emax = eig[0];
+  emin = eig[0];
+  for (i = 1u; i < 3u; i++) {
+    if (eig[i] > emax) {
+      emax = eig[i];
+    }
+    if (eig[i] < emin) {
+      emin = eig[i];
+    }
+  }
+  *spread_pm = (emax > 1e-9) ? (uint16_t)(1000.0 * emin / emax) : 0u;
+
+  /* 诊断量先填：即使门限不过，调用者也能看到"差在哪一项" */
+  *off_x = (int32_t)cx;
+  *off_y = (int32_t)cy;
+  *off_z = (int32_t)cz;
   *radius = (int32_t)rd;
   *rms = (int32_t)rmsd;
   *bins = (uint16_t)covered;
 
-  if (((int32_t)*z_span > COMPASS_CALIB_Z_SPAN_MAX) ||
-      (rmsd > (double)COMPASS_CALIB_RMS_MAX) ||
-      (covered < COMPASS_CALIB_MIN_BINS)) {
+  if ((rd < (double)COMPASS_FIELD_MIN_MG) || (rd > (double)COMPASS_FIELD_MAX_MG)) {
+    return false;
+  }
+  if ((fabs(cx) > (double)COMPASS_CALIB_OFFSET_MAX) ||
+      (fabs(cy) > (double)COMPASS_CALIB_OFFSET_MAX) ||
+      (fabs(cz) > (double)COMPASS_CALIB_OFFSET_MAX)) {
+    return false;
+  }
+  if ((rmsd > (double)COMPASS_CALIB_RMS_MAX) ||
+      (covered < COMPASS_CALIB_MIN_BINS) ||
+      (*spread_pm < COMPASS_CALIB_MIN_SPREAD_PM)) {
     return false;
   }
 
@@ -311,8 +428,8 @@ static bool compass_fit(int32_t *cx, int32_t *cy, int32_t *radius, int32_t *rms,
  * @brief 把磁场矢量换成航向角（0.1°，0=北、顺时针增大）
  * @param x_mg 标定后 X 轴磁场
  * @param y_mg 标定后 Y 轴磁场
- * @note 水平放置时，航向角 θ 满足 Hx = |H|cosθ、Hy = -|H|sinθ（Y 轴朝左、Z 轴朝上），
- *       所以 θ = atan2(-Hy, Hx)；本板轴向与上述不一致时用 COMPASS_Y_INVERT 翻符号。
+ * @note 航向角是"板子 +X 轴相对磁北的方位"；本板传感器 +Z 朝下（实测平放时
+ *       z≈+350 mG），所以 X→Y 从板子正面看是顺时针，θ = atan2(-Hy, Hx)。
  *       再加安装角补偿并归一化到 [0, 3600)。
  */
 static int32_t compass_heading_deg10(int32_t x_mg, int32_t y_mg)
@@ -342,11 +459,11 @@ static void compass_thread_entry(ULONG thread_input)
   compass_snapshot_t snap = {0};
   int32_t off_x = 0;
   int32_t off_y = 0;
+  int32_t off_z = 0;
   int32_t radius = 0;
   int32_t fit_rms = 0;
   uint16_t fit_bins = 0u;
-  int8_t rot_sign = 0;
-  int16_t z_span = 0;
+  uint16_t fit_spread = 0u;
   bool calibrated = false;
   uint32_t missed = 0u;
   uint32_t sequence = 0u;
@@ -362,12 +479,14 @@ static void compass_thread_entry(ULONG thread_input)
       calibrated = false;
       off_x = 0;
       off_y = 0;
+      off_z = 0;
       radius = 0;
       fit_rms = 0;
       fit_bins = 0u;
+      fit_spread = 0u;
     }
 
-    /* 只读、不等：ODR 100 Hz 下 40 ms 周期里 DRDY 一定已经置位；
+    /* 只读、不等：ODR 200 Hz（有效 50 Hz）下 40 ms 周期里 DRDY 一定已经置位；
        万一没置位就跳过本周期，绝不在采集线程里忙等 */
     if ((!g_hw_ready) ||
         (qmc5883p_read_raw(&g_mag, &raw) != QMC5883P_OK) || (!raw.fresh)) {
@@ -382,6 +501,7 @@ static void compass_thread_entry(ULONG thread_input)
       int32_t z = qmc5883p_raw_to_mg(&g_mag, raw.z);
       int32_t cx;
       int32_t cy;
+      int32_t cz;
       bool do_print = false;
 
       /* 进窗口（环形覆盖）：既是标定数据源，也是调试用的原始点云 */
@@ -396,52 +516,55 @@ static void compass_thread_entry(ULONG thread_input)
         g_window_count++;
       }
 
-      /* 每秒拟合一次：转够一圈就会通过门限，之后继续修正（温漂/重新安装） */
+      /* 每秒拟合一次：姿态覆盖够了就会通过门限，之后继续修正（温漂/重新安装） */
       if (++tick_div >= COMPASS_PRINT_EVERY) {
         int32_t new_rms = 0;
         int32_t new_radius = 0;
+        int32_t new_ox = 0;
+        int32_t new_oy = 0;
+        int32_t new_oz = 0;
         uint16_t new_bins = 0u;
-        int8_t new_rot = 0;
-        int16_t new_zspan = 0;
+        uint16_t new_spread = 0u;
         bool fit_ok;
 
         tick_div = 0u;
         do_print = true;
 
-        fit_ok = compass_fit(&cx, &cy, &new_radius, &new_rms, &new_bins,
-                             &new_rot, &new_zspan);
+        fit_ok = compass_fit(&new_ox, &new_oy, &new_oz, &new_radius, &new_rms,
+                             &new_spread, &new_bins);
 
         /* 诊断量无论成败都更新：失败了也能从 RTT 里看出是哪一项没达标 */
         radius = new_radius;
         fit_rms = new_rms;
         fit_bins = new_bins;
-        z_span = new_zspan;
-        rot_sign = new_rot;
+        fit_spread = new_spread;
 
         if (fit_ok) {
-          off_x = cx;
-          off_y = cy;
+          off_x = new_ox;
+          off_y = new_oy;
+          off_z = new_oz;
           calibrated = true;
         }
       }
 
       cx = x - off_x;
       cy = y - off_y;
+      cz = z - off_z;
 
       snap.heading_deg10 = compass_heading_deg10(cx, cy);
       snap.field_mg = (int32_t)sqrtf((float)cx * (float)cx +
                                      (float)cy * (float)cy +
-                                     (float)z * (float)z);
+                                     (float)cz * (float)cz);
       snap.x_mg = (int16_t)x;
       snap.y_mg = (int16_t)y;
       snap.z_mg = (int16_t)z;
       snap.off_x_mg = (int16_t)off_x;
       snap.off_y_mg = (int16_t)off_y;
+      snap.off_z_mg = (int16_t)off_z;
       snap.radius_mg = radius;
       snap.fit_rms_mg = fit_rms;
+      snap.spread_pm = fit_spread;
       snap.coverage_bins = fit_bins;
-      snap.rotation_sign = rot_sign;
-      snap.z_span_mg = z_span;
       snap.calib_samples = g_window_count;
       snap.calibrated = calibrated;
       snap.sequence = ++sequence;
@@ -452,14 +575,14 @@ static void compass_thread_entry(ULONG thread_input)
       /* 1 Hz 摘要：25 Hz 全打会把 RTT 刷爆，也看不出趋势 */
       if (do_print) {
         SEGGER_RTT_printf(0,
-                          "[MAG] hdg=%d.%d |H|=%d x=%d y=%d z=%d cal=%u off=%d/%d r=%d rms=%d cov=%u zsp=%d rot=%d\r\n",
+                          "[MAG] hdg=%d.%d |B|=%d x=%d y=%d z=%d cal=%u off=%d/%d/%d r=%d rms=%d spr=%u cov=%u\r\n",
                           (int)(snap.heading_deg10 / 10),
                           (int)(snap.heading_deg10 % 10), (int)snap.field_mg,
                           (int)snap.x_mg, (int)snap.y_mg, (int)snap.z_mg,
                           (unsigned)snap.calibrated, (int)snap.off_x_mg,
-                          (int)snap.off_y_mg, (int)snap.radius_mg,
-                          (int)snap.fit_rms_mg, (unsigned)snap.coverage_bins,
-                          (int)snap.z_span_mg, (int)snap.rotation_sign);
+                          (int)snap.off_y_mg, (int)snap.off_z_mg,
+                          (int)snap.radius_mg, (int)snap.fit_rms_mg,
+                          (unsigned)snap.spread_pm, (unsigned)snap.coverage_bins);
       }
     }
 
@@ -469,11 +592,16 @@ static void compass_thread_entry(ULONG thread_input)
 
 void compass_hw_init(void)
 {
+  /*
+   * OSR2=4 倍降采样、ODR=200 Hz：PX4 在同一个器件上实测发现，默认的 OSR2=1
+   * 会让 Z 轴静止噪声超过 50 mG（PX4 PR #26350 就是为这个改的）。有效输出率
+   * 200/4 = 50 Hz，仍然高于我们 25 Hz 的采样率，不会读到重复数据。
+   */
   static const qmc5883p_cfg_t cfg = {
       .mode = QMC5883P_MODE_NORMAL,
-      .odr = QMC5883P_ODR_100HZ,
+      .odr = QMC5883P_ODR_200HZ,
       .osr1 = QMC5883P_OSR1_8,
-      .osr2 = QMC5883P_OSR2_1,
+      .osr2 = QMC5883P_OSR2_4,
       .range = QMC5883P_RANGE_8G,
       .set_reset = QMC5883P_SET_RESET_ON,
   };
@@ -487,7 +615,7 @@ void compass_hw_init(void)
     return;
   }
 
-  SEGGER_RTT_printf(0, "[MAG] compass ready: %u Hz sampling, ODR=100Hz, range=8G\r\n",
+  SEGGER_RTT_printf(0, "[MAG] compass ready: %u Hz sampling, ODR=200Hz/OSR2=4, range=8G\r\n",
                     (unsigned)COMPASS_SAMPLE_HZ);
 }
 
