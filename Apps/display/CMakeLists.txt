@@ -25,10 +25,12 @@ target_sources(display PRIVATE ${DISPLAY_Src})
 target_include_directories(display PUBLIC ${DISPLAY_Inc_Dirs})
 
 # App layer may depend on BSP and Services (AGENTS.md): ili9341 for the panel,
-# gps for the snapshot, threadx for the thread, segger_rtt for the debug log.
+# gps for the navigation snapshot, compass for the heading snapshot, threadx for
+# the thread, segger_rtt for the debug log.
 target_link_libraries(display PUBLIC
     ili9341
     gps
+    compass
     threadx
     segger_rtt
 )

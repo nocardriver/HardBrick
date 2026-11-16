@@ -1,7 +1,7 @@
 /**
  * @file    display.c
  * @author  YangKY
- * @brief   竖屏 GPS 数据面板：布局、格式化、脏字段局部刷新
+ * @brief   竖屏数据面板：布局、格式化、脏字段局部刷新（GPS + 航向角）
  *
  * 画面（240x320，竖屏）：
  *
@@ -19,9 +19,11 @@
  *   +--------------------------------------+
  *   |            FIX  SINGLE               |  状态条（颜色随定位状态变化）
  *   +--------------------------------------+
+ *   | HDG                            123   |  航向角（未标定时 UNCAL）
+ *   +--------------------------------------+
  *
- * 刷新策略：每 200 ms 取一次快照，格式化后与上一次的字符串比较，
- * 只有变化的字段才重绘（重绘 = 铺背景 + 写文字，一次 blit），因此
+ * 刷新策略：每 200 ms 取一次 GPS 快照与罗盘快照，格式化后与上一次的字符串
+ * 比较，只有变化的字段才重绘（重绘 = 铺背景 + 写文字，一次 blit），因此
  * 静止时几乎不占总线，时间跳秒时也不会整屏闪烁。
  *
  * 线程优先级 5，低于 GPS 解析线程（4）；像素数据由 SPI DMA 发送，线程在完成
@@ -34,6 +36,7 @@
 #include <string.h>
 
 #include "gps.h"
+#include "compass.h"
 #include "ili9341.h"
 #include "display_text.h"
 #include "tx_api.h"
@@ -68,6 +71,7 @@
 #define COLOR_NOFIX    ILI9341_RGB565(122, 30, 30)
 #define COLOR_LOST     ILI9341_RGB565(122, 58, 10)
 #define COLOR_WAIT     ILI9341_RGB565(42, 58, 74)
+#define COLOR_WARN     ILI9341_RGB565(255, 176, 32)
 
 #define SCREEN_W       240u
 #define SCREEN_H       320u
@@ -122,11 +126,26 @@
 #define STATUS_H       40u
 #define STATUS_TEXT_Y  (STATUS_Y + ((STATUS_H - LABEL_H) / 2u))
 
+/* 航向角：状态条下方剩下的最后一条（292~320）。标签左对齐、数值右对齐，
+   两段之间留空，避免数字位数变化时标签跟着抖 */
+#define HDG_DIV_Y      291u
+#define HDG_Y          292u
+#define HDG_H          28u
+#define HDG_LABEL_X    12u
+#define HDG_LABEL_Y    (HDG_Y + ((HDG_H - LABEL_H) / 2u))
+#define HDG_VALUE_X    112u
+#define HDG_VALUE_W    116u   /* 112 ~ 228 */
+#define HDG_VALUE_H    COORD_H
+#define HDG_VALUE_Y    (HDG_Y + ((HDG_H - HDG_VALUE_H) / 2u))
+
 /* 布局自检：改坐标宏时如果越界，编译期就报错，而不是在屏幕上画花 */
 _Static_assert((COORD_X + COORD_W) <= SCREEN_W, "coordinate field exceeds screen width");
 _Static_assert((SIDE_VALUE_X + SIDE_VALUE_W) <= SCREEN_W, "side value field exceeds screen width");
 _Static_assert((STATUS_X + STATUS_W) <= SCREEN_W, "status bar exceeds screen width");
 _Static_assert((STATUS_Y + STATUS_H) <= SCREEN_H, "status bar exceeds screen height");
+_Static_assert((HDG_VALUE_X + HDG_VALUE_W) <= SCREEN_W, "heading value field exceeds screen width");
+_Static_assert((HDG_Y + HDG_H) <= SCREEN_H, "heading row exceeds screen height");
+_Static_assert(HDG_Y >= (STATUS_Y + STATUS_H), "heading row overlaps status bar");
 _Static_assert(DISPLAY_TEXT_BUF_W >= SCREEN_W, "text buffer narrower than screen");
 _Static_assert(DISPLAY_TEXT_BUF_H >= TIME_H, "text buffer lower than time field");
 
@@ -146,6 +165,12 @@ typedef struct {
   const char *text;
   uint16_t    bg;
 } display_status_t;
+
+/** 航向角的文案与前景色 */
+typedef struct {
+  const char *text;
+  uint16_t    fg;
+} display_heading_t;
 
 static TX_THREAD g_thread;
 static uint8_t   g_stack[DISPLAY_THREAD_STACK_SIZE] __attribute__((aligned(8)));
@@ -237,6 +262,10 @@ static void display_draw_static(void)
   display_text_at("LON", LABEL_X, LON_LABEL_Y, 2u, COLOR_LABEL, COLOR_BG);
   display_text_at("ALT", LABEL_X, ALT_LABEL_Y, 2u, COLOR_LABEL, COLOR_BG);
   display_text_at("SAT", LABEL_X, SAT_LABEL_Y, 2u, COLOR_LABEL, COLOR_BG);
+
+  /* 航向角：分隔线 + 标签；数值是动态字段，见 display_heading_of() */
+  ili9341_fill_rect(DIV_X, HDG_DIV_Y, DIV_W, 1u, COLOR_DIVIDER);
+  display_text_at("HDG", HDG_LABEL_X, HDG_LABEL_Y, 2u, COLOR_LABEL, COLOR_BG);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -384,6 +413,50 @@ static display_status_t display_status_of(const gps_nav_t *nav, uint32_t now)
   return status;
 }
 
+/**
+ * @brief 把罗盘快照变成航向区要显示的文案与前景色
+ * @param snap 罗盘快照（compass_get 拷贝出来的线程安全副本）
+ * @param buf  数字输出缓冲（至少 5 字节）
+ * @param size buf 大小
+ * @retval 指向 buf 或常量字符串的文案 + 前景色
+ * @note  未标定时零偏还没生效，atan2 算出来的角度是错的，所以不显示数字、
+ *        只提示 UNCAL（画 8 字后自动变成角度），避免用户把错角度读成真值。
+ *        航向只取整数度：只有硬磁标定时 0.1° 的分辨率并不成立，末位逐帧
+ *        跳动反而看不清，顺带省掉大量无意义的局部重绘。
+ */
+static display_heading_t display_heading_of(const compass_snapshot_t *snap,
+                                            char *buf, size_t size)
+{
+  display_heading_t out;
+  int deg;
+
+  /* sequence 为 0：采集线程还没产出样本（传感器没就绪），与"未标定"区分开 */
+  if (snap->sequence == 0u) {
+    out.text = "NO MAG";
+    out.fg   = COLOR_LABEL;
+    return out;
+  }
+
+  if (!snap->calibrated) {
+    out.text = "UNCAL";
+    out.fg   = COLOR_WARN;
+    return out;
+  }
+
+  deg = (int)((snap->heading_deg10 + 5) / 10);   /* 四舍五入到整度 */
+  if (deg >= 360) {
+    deg -= 360;                                  /* 359.5° 以上归到 0° */
+  } else if (deg < 0) {
+    deg += 360;
+  }
+
+  (void)snprintf(buf, size, "%03d", deg);        /* 不足 3 位补 0，如 007 */
+  out.text = buf;
+  out.fg   = COLOR_ACCENT;
+
+  return out;
+}
+
 /* ------------------------------------------------------------------------- */
 /* 线程                                                                        */
 /* ------------------------------------------------------------------------- */
@@ -391,6 +464,7 @@ static display_status_t display_status_of(const gps_nav_t *nav, uint32_t now)
 static void display_thread_entry(ULONG thread_input)
 {
   gps_nav_t       nav;
+  compass_snapshot_t mag;
   display_field_t f_time   = {0};
   display_field_t f_date   = {0};
   display_field_t f_lat    = {0};
@@ -398,12 +472,14 @@ static void display_thread_entry(ULONG thread_input)
   display_field_t f_alt    = {0};
   display_field_t f_sat    = {0};
   display_field_t f_status = {0};
+  display_field_t f_hdg    = {0};
   char            tbuf[16];
   char            dbuf[16];
   char            latbuf[24];
   char            lonbuf[24];
   char            altbuf[16];
   char            satbuf[8];
+  char            hdgbuf[8];
   uint32_t        now;
 
   (void)thread_input;
@@ -458,6 +534,15 @@ static void display_thread_entry(ULONG thread_input)
     {
       display_status_t status = display_status_of(&nav, now);
       display_status_update(&status, &f_status);
+    }
+
+    /* 航向角：未标定显示 UNCAL，标定后显示 3 位整数度 */
+    compass_get(&mag);
+    {
+      display_heading_t hdg = display_heading_of(&mag, hdgbuf, sizeof(hdgbuf));
+      display_field_update(HDG_VALUE_X, HDG_VALUE_Y, HDG_VALUE_W, HDG_VALUE_H,
+                           hdg.text, 3u, hdg.fg, COLOR_BG,
+                           DISPLAY_TEXT_RIGHT, &f_hdg);
     }
 
     tx_thread_sleep(DISPLAY_REFRESH_TICKS);
