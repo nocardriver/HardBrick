@@ -27,6 +27,7 @@ target_include_directories(compass PUBLIC ${COMPASS_Inc_Dirs})
 # threadx for the RTOS primitives, segger_rtt for the 1 Hz summary.
 target_link_libraries(compass PUBLIC
     qmc5883p
+    param_store
     segger_rtt
     threadx
 )

@@ -26,6 +26,7 @@
 
 #include "compass.h"
 
+#include "param_store.h"
 #include "qmc5883p.h"
 #include "SEGGER_RTT.h"
 #include "tx_api.h"
@@ -55,8 +56,8 @@
 #define COMPASS_FIELD_MIN_MG 250
 #define COMPASS_FIELD_MAX_MG 750
 
-/** 拟合残差 RMS 上限，mG；超过说明点云不是球（软磁强 / 有外部干扰） */
-#define COMPASS_CALIB_RMS_MAX 8
+/** 拟合残差 RMS 上限，占拟合半径的比例；球模型吸收不了软磁，给 8% 的余量 */
+#define COMPASS_CALIB_RMS_RATIO 0.08
 
 /**
  * 三维分布门限：样本协方差的最小/最大特征值之比（×1000 存进快照）。
@@ -67,6 +68,12 @@
 
 /** 零偏绝对值上限，mG；超过基本都是拟合发散 */
 #define COMPASS_CALIB_OFFSET_MAX 1500
+
+/** 自动落盘门限：零偏变化超过这个值才写 Flash（避免每秒重拟合都写一次） */
+#define COMPASS_STORE_MIN_DELTA_MG 20
+
+/** 自动落盘最小间隔（ThreadX tick，100 Hz → 60000 = 10 min） */
+#define COMPASS_STORE_MIN_INTERVAL 60000u
 
 /**
  * Y 轴符号：实测平放（板子水平贴在桌面上）时 Z 读到 +350 mG 左右，
@@ -104,6 +111,112 @@ static bool g_hw_ready;
 
 /** 互斥量是否已创建：compass_get() 在 compass_init() 之前调用时返回零快照 */
 static bool g_lock_ready;
+
+/** 从 Flash 恢复的标定（compass_hw_init 里填，采集线程启动时套用） */
+static struct {
+  bool valid;
+  int16_t off_x;
+  int16_t off_y;
+  int16_t off_z;
+  int16_t radius;
+} g_saved;
+
+/** 上一次写 Flash 的时刻，用于限流（避免每秒拟合都写一次） */
+static uint32_t g_last_store_tick;
+
+/*---------------------------------------------------------------------------*/
+/* 标定结果的持久化（内部 Flash，见 BSP/ParamStore）                          */
+/*---------------------------------------------------------------------------*/
+
+/** @brief 32 位取绝对值（避免引入 stdlib 的 abs 与隐式转换告警） */
+static int32_t abs32(int32_t v)
+{
+  return (v < 0) ? -v : v;
+}
+
+/** @brief 负载编码：4 个 int16（小端）= off_x, off_y, off_z, radius */
+static void calib_encode(int32_t ox, int32_t oy, int32_t oz, int32_t radius,
+                         uint8_t out[PARAM_STORE_PAYLOAD_SIZE])
+{
+  int32_t v[4];
+  uint32_t i;
+
+  v[0] = ox;
+  v[1] = oy;
+  v[2] = oz;
+  v[3] = radius;
+
+  for (i = 0u; i < 4u; i++) {
+    out[i * 2u] = (uint8_t)(v[i] & 0xFF);
+    out[i * 2u + 1u] = (uint8_t)((v[i] >> 8) & 0xFF);
+  }
+}
+
+/** @brief 负载解码；半径明显不合理说明记录是旧的/坏的，按无效处理 */
+static bool calib_decode(const uint8_t in[PARAM_STORE_PAYLOAD_SIZE], int32_t *ox,
+                         int32_t *oy, int32_t *oz, int32_t *radius)
+{
+  int16_t v[4];
+  uint32_t i;
+
+  for (i = 0u; i < 4u; i++) {
+    v[i] = (int16_t)((uint16_t)in[i * 2u] | ((uint16_t)in[i * 2u + 1u] << 8));
+  }
+
+  if ((v[3] < COMPASS_FIELD_MIN_MG) || (v[3] > COMPASS_FIELD_MAX_MG)) {
+    return false;
+  }
+
+  *ox = v[0];
+  *oy = v[1];
+  *oz = v[2];
+  *radius = v[3];
+
+  return true;
+}
+
+/** @brief 写一条记录到 Flash 并更新内存里的副本 */
+static bool calib_store(int32_t ox, int32_t oy, int32_t oz, int32_t radius)
+{
+  uint8_t payload[PARAM_STORE_PAYLOAD_SIZE];
+
+  calib_encode(ox, oy, oz, radius, payload);
+  if (!param_store_save(payload)) {
+    return false;
+  }
+
+  g_saved.valid = true;
+  g_saved.off_x = (int16_t)ox;
+  g_saved.off_y = (int16_t)oy;
+  g_saved.off_z = (int16_t)oz;
+  g_saved.radius = (int16_t)radius;
+  g_last_store_tick = tx_time_get();
+
+  return true;
+}
+
+/**
+ * @brief 标定成功后按门限决定要不要落盘
+ * @note 门限：零偏变化 >20 mG，且距上次写 Flash 超过 10 min。
+ *       不限流的话"每秒重拟合"会把 Flash 写爆（虽然日志式存储已经省了擦除次数）。
+ */
+static void calib_maybe_store(int32_t ox, int32_t oy, int32_t oz, int32_t radius)
+{
+  int32_t delta;
+
+  if (g_saved.valid) {
+    delta = abs32(ox - g_saved.off_x) + abs32(oy - g_saved.off_y) +
+            abs32(oz - g_saved.off_z);
+    if (delta < COMPASS_STORE_MIN_DELTA_MG) {
+      return;
+    }
+    if ((tx_time_get() - g_last_store_tick) < COMPASS_STORE_MIN_INTERVAL) {
+      return;
+    }
+  }
+
+  (void)calib_store(ox, oy, oz, radius);
+}
 
 static void compass_publish(const compass_snapshot_t *snap)
 {
@@ -415,7 +528,7 @@ static bool compass_fit(int32_t *off_x, int32_t *off_y, int32_t *off_z,
       (fabs(cz) > (double)COMPASS_CALIB_OFFSET_MAX)) {
     return false;
   }
-  if ((rmsd > (double)COMPASS_CALIB_RMS_MAX) ||
+  if ((rmsd > (COMPASS_CALIB_RMS_RATIO * rd)) ||
       (covered < COMPASS_CALIB_MIN_BINS) ||
       (*spread_pm < COMPASS_CALIB_MIN_SPREAD_PM)) {
     return false;
@@ -470,6 +583,15 @@ static void compass_thread_entry(ULONG thread_input)
   uint32_t tick_div = 0u;
 
   (void)thread_input;
+
+  /* 上次标定过就直接用，不必每次上电重新画 8 字 */
+  if (g_saved.valid) {
+    off_x = g_saved.off_x;
+    off_y = g_saved.off_y;
+    off_z = g_saved.off_z;
+    radius = g_saved.radius;
+    calibrated = true;
+  }
 
   for (;;) {
     if (g_calib_reset_req) {
@@ -544,6 +666,7 @@ static void compass_thread_entry(ULONG thread_input)
           off_y = new_oy;
           off_z = new_oz;
           calibrated = true;
+          calib_maybe_store(new_ox, new_oy, new_oz, new_radius);
         }
       }
 
@@ -617,6 +740,33 @@ void compass_hw_init(void)
 
   SEGGER_RTT_printf(0, "[MAG] compass ready: %u Hz sampling, ODR=200Hz/OSR2=4, range=8G\r\n",
                     (unsigned)COMPASS_SAMPLE_HZ);
+
+  /* 从 Flash 恢复上次标定，避免每次上电都重新画 8 字 */
+  if (!param_store_init()) {
+    SEGGER_RTT_WriteString(0, "[MAG] param store unavailable, calibration not persisted\r\n");
+    return;
+  }
+
+  {
+    uint8_t payload[PARAM_STORE_PAYLOAD_SIZE];
+    int32_t ox = 0;
+    int32_t oy = 0;
+    int32_t oz = 0;
+    int32_t r = 0;
+
+    if (param_store_load(payload) && calib_decode(payload, &ox, &oy, &oz, &r)) {
+      g_saved.valid = true;
+      g_saved.off_x = (int16_t)ox;
+      g_saved.off_y = (int16_t)oy;
+      g_saved.off_z = (int16_t)oz;
+      g_saved.radius = (int16_t)r;
+      SEGGER_RTT_printf(0, "[MAG] calibration from flash: off=%d/%d/%d r=%d\r\n",
+                        (int)g_saved.off_x, (int)g_saved.off_y,
+                        (int)g_saved.off_z, (int)g_saved.radius);
+    } else {
+      SEGGER_RTT_WriteString(0, "[MAG] no stored calibration, draw a figure-8 once\r\n");
+    }
+  }
 }
 
 void compass_init(void)
@@ -655,6 +805,44 @@ void compass_get(compass_snapshot_t *out)
 void compass_calib_reset(void)
 {
   g_calib_reset_req = true;
+}
+
+bool compass_calib_save(void)
+{
+  compass_snapshot_t snap;
+  uint8_t payload[PARAM_STORE_PAYLOAD_SIZE];
+
+  if (!g_lock_ready) {
+    return false;
+  }
+
+  compass_get(&snap);
+  if (!snap.calibrated) {
+    return false;
+  }
+
+  calib_encode(snap.off_x_mg, snap.off_y_mg, snap.off_z_mg, snap.radius_mg,
+               payload);
+
+  if (!param_store_save(payload)) {
+    return false;
+  }
+
+  g_saved.valid = true;
+  g_saved.off_x = snap.off_x_mg;
+  g_saved.off_y = snap.off_y_mg;
+  g_saved.off_z = snap.off_z_mg;
+  g_saved.radius = (int16_t)snap.radius_mg;
+
+  return true;
+}
+
+bool compass_calib_clear(void)
+{
+  g_saved.valid = false;
+  g_calib_reset_req = true;
+
+  return param_store_clear();
 }
 
 void compass_set_heading_offset(int16_t deg10)

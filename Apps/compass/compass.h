@@ -22,6 +22,10 @@
  * compass_set_heading_offset() 一次性补掉安装角。磁北与真北差磁偏角（上海约 -5.5°），
  * 与手机指南针对比时要留意这一点。
  *
+ * 标定结果会写进内部 Flash（BSP/ParamStore），**上电自动恢复，不需要每次重新
+ * 画 8 字**；只有换安装位置、加装金属件、换电池这类改变了磁环境的情况才需要
+ * 调 compass_calib_clear() 重新标定。
+ *
  * 线程：25 Hz 采集 + 1 Hz RTT 摘要；快照用互斥量保护，供显示线程 / 上位机读取。
  */
 
@@ -98,6 +102,21 @@ void compass_get(compass_snapshot_t *out);
  *       换电池、换安装位置、附近新增铁磁物体后应该调用一次。
  */
 void compass_calib_reset(void);
+
+/**
+ * @brief 立即把当前标定写入 Flash（下次上电自动恢复）
+ * @retval true 已写入；false 尚未标定 / 存储不可用
+ * @note 标定成功后驱动会自动落盘（零偏变化超过 20 mG 且距上次保存超过 10 min），
+ *       这个接口只在需要强制落盘时用。
+ */
+bool compass_calib_save(void);
+
+/**
+ * @brief 清除 Flash 里的标定并重新开始标定
+ * @retval true 已擦除；false 存储不可用
+ * @note 换安装位置 / 附近新增铁磁物体后调用，然后重新画 8 字。
+ */
+bool compass_calib_clear(void);
 
 /**
  * @brief 设置安装角补偿，叠加到航向角上
