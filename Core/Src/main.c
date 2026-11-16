@@ -45,6 +45,7 @@
 #include "e22.h"
 #include "e22_port.h"
 #include "qmc5883p.h"
+#include "compass.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -236,6 +237,9 @@ void tx_application_define(void *first_unused_memory){
   /* 存储应用层：挂载 FAT 卷并做一次读写自检。
      必须在内核启动后——FatFs 的卷互斥量是 ThreadX 对象 */
   storage_init();
+
+  /* 地磁罗盘：25 Hz 采集线程（优先级最低）。传感器已在 compass_hw_init() 里配好 */
+  compass_init();
 }
 /* USER CODE END 0 */
 
@@ -356,6 +360,10 @@ int main(void)
                     (unsigned)g_qmc_probe.reg_ctrl2,
                     (int)g_qmc_probe.st_dx, (int)g_qmc_probe.st_dy,
                     (int)g_qmc_probe.st_dz, (int)g_qmc_probe.last_mg_l1);
+
+  /* 罗盘应用层：按 25 Hz 采集的要求重配传感器（ODR 100 Hz / ±8 G）。
+     自检那一次用的是 200 Hz 临时配置，这里以应用配置为准 */
+  compass_hw_init();
 
   // start threadx kernel
   tx_kernel_enter();

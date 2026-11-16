@@ -12,6 +12,7 @@ add_subdirectory(display)
 add_subdirectory(backlight)
 add_subdirectory(usb_msc)
 add_subdirectory(storage)
+add_subdirectory(compass)
 
 # Export list of application libraries to the parent (top-level) scope
 set(APP_LIBS
@@ -20,6 +21,7 @@ set(APP_LIBS
     backlight_app
     usb_msc
     storage
+    compass
     # Add new application library targets here
     PARENT_SCOPE
 )
