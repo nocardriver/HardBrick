@@ -26,7 +26,7 @@
 
 #include "compass.h"
 
-#include "param_store.h"
+#include "compass_store.h"
 #include "qmc5883p.h"
 #include "SEGGER_RTT.h"
 #include "tx_api.h"
@@ -74,6 +74,9 @@
 
 /** 自动落盘最小间隔（ThreadX tick，100 Hz → 60000 = 10 min） */
 #define COMPASS_STORE_MIN_INTERVAL 60000u
+
+/** 从 TF 卡加载标定的重试周期（循环次数，每轮 40 ms → 50 轮 = 2 s） */
+#define COMPASS_LOAD_RETRY 50u
 
 /**
  * Y 轴符号：实测平放（板子水平贴在桌面上）时 Z 读到 +350 mG 左右，
@@ -134,54 +137,13 @@ static int32_t abs32(int32_t v)
   return (v < 0) ? -v : v;
 }
 
-/** @brief 负载编码：4 个 int16（小端）= off_x, off_y, off_z, radius */
-static void calib_encode(int32_t ox, int32_t oy, int32_t oz, int32_t radius,
-                         uint8_t out[PARAM_STORE_PAYLOAD_SIZE])
-{
-  int32_t v[4];
-  uint32_t i;
-
-  v[0] = ox;
-  v[1] = oy;
-  v[2] = oz;
-  v[3] = radius;
-
-  for (i = 0u; i < 4u; i++) {
-    out[i * 2u] = (uint8_t)(v[i] & 0xFF);
-    out[i * 2u + 1u] = (uint8_t)((v[i] >> 8) & 0xFF);
-  }
-}
-
-/** @brief 负载解码；半径明显不合理说明记录是旧的/坏的，按无效处理 */
-static bool calib_decode(const uint8_t in[PARAM_STORE_PAYLOAD_SIZE], int32_t *ox,
-                         int32_t *oy, int32_t *oz, int32_t *radius)
-{
-  int16_t v[4];
-  uint32_t i;
-
-  for (i = 0u; i < 4u; i++) {
-    v[i] = (int16_t)((uint16_t)in[i * 2u] | ((uint16_t)in[i * 2u + 1u] << 8));
-  }
-
-  if ((v[3] < COMPASS_FIELD_MIN_MG) || (v[3] > COMPASS_FIELD_MAX_MG)) {
-    return false;
-  }
-
-  *ox = v[0];
-  *oy = v[1];
-  *oz = v[2];
-  *radius = v[3];
-
-  return true;
-}
-
-/** @brief 写一条记录到 Flash 并更新内存里的副本 */
+/**
+ * @brief 写一条标定到 TF 卡并更新内存里的副本
+ * @note 卡没挂上（或 PC 正占用）时返回 false，调用方隔一会儿再试
+ */
 static bool calib_store(int32_t ox, int32_t oy, int32_t oz, int32_t radius)
 {
-  uint8_t payload[PARAM_STORE_PAYLOAD_SIZE];
-
-  calib_encode(ox, oy, oz, radius, payload);
-  if (!param_store_save(payload)) {
+  if (!compass_store_save(ox, oy, oz, radius)) {
     return false;
   }
 
@@ -197,8 +159,8 @@ static bool calib_store(int32_t ox, int32_t oy, int32_t oz, int32_t radius)
 
 /**
  * @brief 标定成功后按门限决定要不要落盘
- * @note 门限：零偏变化 >20 mG，且距上次写 Flash 超过 10 min。
- *       不限流的话"每秒重拟合"会把 Flash 写爆（虽然日志式存储已经省了擦除次数）。
+ * @note 门限：零偏变化 >20 mG，且距上次尝试写卡超过 10 min。
+ *       卡没挂上或 PC 占用时写不进去，等下一个窗口再试。
  */
 static void calib_maybe_store(int32_t ox, int32_t oy, int32_t oz, int32_t radius)
 {
@@ -215,7 +177,10 @@ static void calib_maybe_store(int32_t ox, int32_t oy, int32_t oz, int32_t radius
     }
   }
 
-  (void)calib_store(ox, oy, oz, radius);
+  if (!calib_store(ox, oy, oz, radius)) {
+    /* 写失败也记一次时间，避免每秒重试把 SD 卡刷爆 */
+    g_last_store_tick = tx_time_get();
+  }
 }
 
 static void compass_publish(const compass_snapshot_t *snap)
@@ -581,6 +546,7 @@ static void compass_thread_entry(ULONG thread_input)
   uint32_t missed = 0u;
   uint32_t sequence = 0u;
   uint32_t tick_div = 0u;
+  uint32_t load_div = 0u;
 
   (void)thread_input;
 
@@ -606,6 +572,31 @@ static void compass_thread_entry(ULONG thread_input)
       fit_rms = 0;
       fit_bins = 0u;
       fit_spread = 0u;
+    }
+
+    /* 卡挂上之后再把标定读进来：compass_hw_init() 跑在内核启动前，那时 FATFS 还没挂载。
+       每 2 s 试一次，读到就停（标定成功后 calibrated 置位，这里自然不再尝试） */
+    if ((!calibrated) && (++load_div >= COMPASS_LOAD_RETRY)) {
+      int32_t lx = 0;
+      int32_t ly = 0;
+      int32_t lz = 0;
+      int32_t lr = 0;
+
+      load_div = 0u;
+      if (compass_store_load(&lx, &ly, &lz, &lr)) {
+        off_x = lx;
+        off_y = ly;
+        off_z = lz;
+        radius = lr;
+        calibrated = true;
+        g_saved.valid = true;
+        g_saved.off_x = (int16_t)lx;
+        g_saved.off_y = (int16_t)ly;
+        g_saved.off_z = (int16_t)lz;
+        g_saved.radius = (int16_t)lr;
+        SEGGER_RTT_printf(0, "[MAG] calibration from SD: off=%d/%d/%d r=%d\r\n",
+                          (int)off_x, (int)off_y, (int)off_z, (int)radius);
+      }
     }
 
     /* 只读、不等：ODR 200 Hz（有效 50 Hz）下 40 ms 周期里 DRDY 一定已经置位；
@@ -741,32 +732,9 @@ void compass_hw_init(void)
   SEGGER_RTT_printf(0, "[MAG] compass ready: %u Hz sampling, ODR=200Hz/OSR2=4, range=8G\r\n",
                     (unsigned)COMPASS_SAMPLE_HZ);
 
-  /* 从 Flash 恢复上次标定，避免每次上电都重新画 8 字 */
-  if (!param_store_init()) {
-    SEGGER_RTT_WriteString(0, "[MAG] param store unavailable, calibration not persisted\r\n");
-    return;
-  }
-
-  {
-    uint8_t payload[PARAM_STORE_PAYLOAD_SIZE];
-    int32_t ox = 0;
-    int32_t oy = 0;
-    int32_t oz = 0;
-    int32_t r = 0;
-
-    if (param_store_load(payload) && calib_decode(payload, &ox, &oy, &oz, &r)) {
-      g_saved.valid = true;
-      g_saved.off_x = (int16_t)ox;
-      g_saved.off_y = (int16_t)oy;
-      g_saved.off_z = (int16_t)oz;
-      g_saved.radius = (int16_t)r;
-      SEGGER_RTT_printf(0, "[MAG] calibration from flash: off=%d/%d/%d r=%d\r\n",
-                        (int)g_saved.off_x, (int)g_saved.off_y,
-                        (int)g_saved.off_z, (int)g_saved.radius);
-    } else {
-      SEGGER_RTT_WriteString(0, "[MAG] no stored calibration, draw a figure-8 once\r\n");
-    }
-  }
+  /* 标定结果存在 TF 卡上（0:/COMPASS.CAL）。真正加载放在采集线程里做：
+     compass_hw_init() 跑在内核启动前，那时 storage 线程还没挂载 FATFS */
+  SEGGER_RTT_WriteString(0, "[MAG] calibration is stored on TF card: " COMPASS_STORE_PATH "\r\n");
 }
 
 void compass_init(void)
@@ -810,7 +778,6 @@ void compass_calib_reset(void)
 bool compass_calib_save(void)
 {
   compass_snapshot_t snap;
-  uint8_t payload[PARAM_STORE_PAYLOAD_SIZE];
 
   if (!g_lock_ready) {
     return false;
@@ -821,10 +788,8 @@ bool compass_calib_save(void)
     return false;
   }
 
-  calib_encode(snap.off_x_mg, snap.off_y_mg, snap.off_z_mg, snap.radius_mg,
-               payload);
-
-  if (!param_store_save(payload)) {
+  if (!compass_store_save(snap.off_x_mg, snap.off_y_mg, snap.off_z_mg,
+                          snap.radius_mg)) {
     return false;
   }
 
@@ -842,7 +807,7 @@ bool compass_calib_clear(void)
   g_saved.valid = false;
   g_calib_reset_req = true;
 
-  return param_store_clear();
+  return compass_store_clear();
 }
 
 void compass_set_heading_offset(int16_t deg10)
