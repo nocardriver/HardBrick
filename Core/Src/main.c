@@ -44,6 +44,7 @@
 #include "usb_msc.h"
 #include "e22.h"
 #include "e22_port.h"
+#include "qmc5883p.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -336,6 +337,25 @@ int main(void)
   LC760Z_init();
   // LoRa(E22-400T22S)初始化 + 上电自检（型号/固件/参数打印到 RTT）
   lora_selftest();
+
+  /* 地磁 QMC5883P 上电自检：地址 → CHIPID → 16 个样本 → Set/Reset 内部自检。
+     结果同时留在 g_qmc_probe 里，J-Link 可以直接读，不依赖 RTT 是否在看 */
+  qmc5883p_probe();
+  SEGGER_RTT_printf(0, "[MAG] stage=%u id=0x%02x n=%u err=%u stat=0x%02x\r\n",
+                    (unsigned)g_qmc_probe.stage, (unsigned)g_qmc_probe.chip_id,
+                    (unsigned)g_qmc_probe.samples, (unsigned)g_qmc_probe.errors,
+                    (unsigned)g_qmc_probe.status);
+  SEGGER_RTT_printf(0, "[MAG] last x=%d y=%d z=%d  min/max x=%d..%d y=%d..%d z=%d..%d\r\n",
+                    (int)g_qmc_probe.x_last, (int)g_qmc_probe.y_last,
+                    (int)g_qmc_probe.z_last, (int)g_qmc_probe.x_min,
+                    (int)g_qmc_probe.x_max, (int)g_qmc_probe.y_min,
+                    (int)g_qmc_probe.y_max, (int)g_qmc_probe.z_min,
+                    (int)g_qmc_probe.z_max);
+  SEGGER_RTT_printf(0, "[MAG] ctrl=0x%02x/0x%02x self=%d/%d/%d mg=%d\r\n",
+                    (unsigned)g_qmc_probe.reg_ctrl1,
+                    (unsigned)g_qmc_probe.reg_ctrl2,
+                    (int)g_qmc_probe.st_dx, (int)g_qmc_probe.st_dy,
+                    (int)g_qmc_probe.st_dz, (int)g_qmc_probe.last_mg_l1);
 
   // start threadx kernel
   tx_kernel_enter();
