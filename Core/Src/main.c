@@ -46,6 +46,8 @@
 #include "e22_port.h"
 #include "qmc5883p.h"
 #include "compass.h"
+#include "mx01p.h"
+#include "mx01p_port.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -73,6 +75,13 @@ static uint8_t my_thread_stack[1024] __attribute__((aligned(8)));
 /* LoRa（E22-400T22S）：接收环形缓冲必须是 2 的幂，满时驱动丢弃新数据 */
 static uint8_t g_lora_rx_ring[1024];
 static e22_t   g_lora;
+
+/* 蓝牙（MX-01P）：环形缓冲容量必须是 2 的幂，满时驱动丢弃新数据。
+   g_bt_probe 故意做成全局（非 static）：J-Link 可以按符号直接读自检结果，
+   不依赖 RTT 是否在连。 */
+static uint8_t g_bt_rx_ring[1024];
+static mx01p_t g_bt;
+mx01p_probe_t  g_bt_probe;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -203,6 +212,64 @@ static void lora_selftest(void)
   } else {
     SEGGER_RTT_WriteString(0, "[LORA] read params failed\r\n");
   }
+}
+
+/* ---- 蓝牙（MX-01P）上电自检：诊断量全部落进 g_bt_probe，RTT 只是其中一份拷贝 ---- */
+static void bt_selftest(void)
+{
+  /* 手册里 AT+UART=NUM 的码值顺序，下标即码值 */
+  static const char *const baud_code_name[9] = {
+    "9600",  "14400", "19200",  "38400",  "57600",
+    "115200", "230400", "460800", "921600",
+  };
+  mx01p_cfg_t cfg = {
+    .rx_ring = g_bt_rx_ring,
+    .rx_ring_size = (uint16_t)sizeof(g_bt_rx_ring),
+    .evt_cb = NULL,
+    .user = NULL,
+    .ready_timeout_ms = 0u, /* 0 = 用驱动默认的 3000 ms */
+  };
+  const mx01p_probe_t *p = &g_bt_probe;
+  const char *baud_name;
+  bool ok;
+
+  ok = mx01p_probe(&g_bt, &cfg, &g_bt_probe);
+
+  baud_name = ((unsigned)p->baud_code < 9u) ? baud_code_name[(unsigned)p->baud_code]
+                                            : "?";
+
+  SEGGER_RTT_printf(0, "[BT] probe=%u stage=%u init=%d ready=%u ms retry=%u\r\n",
+                    (unsigned)ok, (unsigned)p->stage, (int)p->init_st,
+                    (unsigned)p->ready_ms, (unsigned)p->reset_retry);
+  if (p->init_st != 0) {
+    /* 超时基本只有三种原因：模块没供电、RES 没释放、串口波特率不匹配 */
+    SEGGER_RTT_WriteString(0, "[BT] init failed: check VCC/RES/USART1 115200\r\n");
+    SEGGER_RTT_printf(0, "[BT] rx_dropped=%u resp_overrun=%u\r\n",
+                      (unsigned)p->rx_dropped, (unsigned)p->resp_overrun);
+    return;
+  }
+
+  SEGGER_RTT_printf(0, "[BT] mac=%s(%d) name=%s(%d)\r\n", p->mac,
+                    (int)p->mac_st, p->name, (int)p->name_st);
+  SEGGER_RTT_printf(0, "[BT] ver=%s(%d)\r\n", p->version, (int)p->version_st);
+  SEGGER_RTT_printf(0, "[BT] uart=%s code=%d(%d) adv=%d(%d) aintvl=%d ms(%d)\r\n",
+                    baud_name, (int)p->baud_code, (int)p->baud_st, (int)p->adv_on,
+                    (int)p->adv_st, (int)p->interval_ms, (int)p->interval_st);
+  SEGGER_RTT_printf(0, "[BT] txpower_code=%d(%d)\r\n", (int)p->power_code,
+                    (int)p->power_st);
+  SEGGER_RTT_printf(0, "[BT] uuid s=%s n=%s w=%s (%d)\r\n", p->uuid_service,
+                    p->uuid_notify, p->uuid_write, (int)p->uuid_st);
+  SEGGER_RTT_printf(0, "[BT] sleep st=%d blocked=%d wake=%d\r\n", (int)p->sleep_st,
+                    (int)p->sleep_blocked, (int)p->wake_st);
+  SEGGER_RTT_printf(0, "[BT] loop_st=%d len=%u text=%s\r\n", (int)p->loop_st,
+                    (unsigned)p->loop_len, p->loopback);
+  SEGGER_RTT_printf(0, "[BT] reboot_st=%d\r\n", (int)p->reboot_st);
+  SEGGER_RTT_printf(0, "[BT] link_st=%d connected=%u dev_mac=%s\r\n",
+                    (int)p->link_st, (unsigned)mx01p_is_connected(&g_bt),
+                    mx01p_is_connected(&g_bt) ? "see J-Link" : "-");
+  SEGGER_RTT_printf(0, "[BT] at=%u fail=%u drop=%u overrun=%u\r\n",
+                    (unsigned)p->at_total, (unsigned)p->at_fail,
+                    (unsigned)p->rx_dropped, (unsigned)p->resp_overrun);
 }
 
 void tx_application_define(void *first_unused_memory){
@@ -343,6 +410,10 @@ int main(void)
   // LoRa(E22-400T22S)初始化 + 上电自检（型号/固件/参数打印到 RTT）
   lora_selftest();
 
+  /* 蓝牙 MX-01P 上电自检：硬复位等 +READY → 一轮 AT 查询 → 睡眠脚验证。
+     结果同时留在 g_bt_probe 里，J-Link 可以直接按符号读，不依赖 RTT 是否在看 */
+  bt_selftest();
+
   /* 地磁 QMC5883P 上电自检：地址 → CHIPID → 16 个样本 → Set/Reset 内部自检。
      结果同时留在 g_qmc_probe 里，J-Link 可以直接读，不依赖 RTT 是否在看 */
   qmc5883p_probe();
@@ -480,6 +551,13 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size){
     }
     e22_port_rx_event(Size);
   }
+  else if(huart->Instance == USART1){
+    /* 蓝牙：ISR 里只做分流（控制行 → 应答邮箱/事件，数据 → 环形缓冲）并 rearm */
+    if(HAL_UARTEx_GetRxEventType(huart) == HAL_UART_RXEVENT_HT){
+      return;
+    }
+    mx01p_port_rx_event(Size);
+  }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart){
@@ -490,6 +568,10 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart){
   else if(huart->Instance == LPUART1){
     /* ORE/帧错误：复位接收并 rearm，最多毁掉当前一包 */
     e22_port_uart_error();
+  }
+  else if(huart->Instance == USART1){
+    /* 蓝牙同理：复位接收并 rearm，不 panic、不打印 */
+    mx01p_port_uart_error();
   }
 }
 /* USER CODE END 4 */

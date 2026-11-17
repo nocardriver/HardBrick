@@ -14,6 +14,7 @@ add_subdirectory(SDCard)
 add_subdirectory(USBConnect)
 add_subdirectory(E22)
 add_subdirectory(QMC5883P)
+add_subdirectory(MX01P)
 
 # Export list of BSP libraries to the parent (top-level) scope
 set(BSP_LIBS
@@ -24,6 +25,7 @@ set(BSP_LIBS
     usb_connect
     e22
     qmc5883p
+    mx01p
     # Add new BSP library targets here
     PARENT_SCOPE
 )
