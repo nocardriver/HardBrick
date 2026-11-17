@@ -174,7 +174,9 @@ struct mx01p {
   char link_mac[MX01P_MAC_STR_LEN + 1u]; /**< 最近一次事件的 MAC */
   bool ready;                    /**< init 成功，可以收发 AT */
   bool asleep;                   /**< 模块当前被 BRTS 拉入睡眠 */
-  volatile bool rx_loss;         /**< 发生过 ORE/帧错误（排查接线用） */
+  volatile uint32_t rx_errors;   /**< ORE/帧错误计数。模块复位、BRTS 唤醒的瞬间
+                                     各可能出现 1 次，属正常；运行中持续增长说明
+                                     接线/波特率/电平有问题 */
 
   mx01p_event_cb_t evt_cb;       /**< 事件回调 */
   void *user;                    /**< 回调上下文 */

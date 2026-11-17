@@ -140,9 +140,10 @@ void mx01p_port_rx_event(uint16_t size)
 
 void mx01p_port_uart_error(void)
 {
-  /* ORE/帧错误最多毁掉当前一包，复位接收后继续；不 panic、不打印 */
+  /* ORE/帧错误最多毁掉当前一包，复位接收后继续；不 panic、不打印。
+     模块复位/唤醒的瞬间本来就容易出一次，属正常现象，所以只计数不中断流程 */
   if (g_inst != NULL) {
-    g_inst->rx_loss = true;
+    g_inst->rx_errors++;
   }
   (void)mx01p_port_rx_start();
 }

@@ -1,158 +1,207 @@
-# MX-01P锛圔LE 5.3 閫忎紶锛塀SP 妯″潡璁捐鏂囨。
+# MX-01P（BLE 5.3 透传）BSP 模块设计文档
 
-## 1. 妯″潡姒傝堪
+## 1. 模块概述
 
-鏈ā鍧楁彁渚涘浜鎶€ MX-01P 钃濈墮浣庡姛鑰楋紙BLE 5.3锛夐€忎紶妯″潡鐨勫簳灞傞┍鍔紝鑱岃矗闄愬畾涓猴細
+本模块提供妙享科技 MX-01P 蓝牙低功耗（BLE 5.3）透传模块的底层驱动，职责限定为：
 
-- **鐢熷懡鍛ㄦ湡**锛歊ES 纭浣?/ `AT+REBOOT` 杞浣?/ 鎭㈠鍑哄巶锛屼互鍙婃墜鍐屽己鍒剁殑
-  `+READY` 鎻℃墜锛?- **鏁版嵁闈?*锛氶€忎紶鍙戦€侊紙`FFF1` 閫氱煡閫氶亾锛夈€佷腑鏂帴鏀?+ 鐜舰缂撳啿銆?  **AT 搴旂瓟涓庨€忎紶鏁版嵁鐨勪覆鍙ｅ垎娴?*锛?- **鎺у埗闈?*锛氭墜鍐岀 5~15 椤靛叏濂?AT 鎸囦护锛圡AC / 鍚嶇О / 骞挎挱 / 娉㈢壒鐜?/ 骞挎挱闂撮殧 /
-  鐗堟湰 / 鍔熺巼 / 涓夋潯 UUID / 鑷畾涔夊箍鎾暟鎹?/ 璁惧鍒楄〃 / 鏂紑杩炴帴锛夛紱
-- **鍔熻€?*锛欱RTS 鐫＄湢鑴氭帶鍒讹紝鍙戦€佷笌 AT 鍓嶈嚜鍔ㄥ敜閱掋€?
-涓氬姟閫昏緫锛堣繛鎺ョ鐞嗙瓥鐣ャ€佹暟鎹崗璁皝瑁呫€佷綆鍔熻€楄皟搴︺€丱TA 绛夛級鏀惧湪 `App/` 灞傦紝
-鏈ā鍧椾笉鎺哄拰銆?
-**璧勬枡**锛歚C:\myProjects\PCB_Proj\docs\MX-01P瑙勬牸涔?V0.0.5.pdf`
+- **生命周期**：RES 硬复位 / `AT+REBOOT` 软复位 / 恢复出厂，以及手册强制的
+  `+READY` 握手；
+- **数据面**：透传发送（`FFF1` 通知通道）、中断接收 + 环形缓冲、
+  **AT 应答与透传数据的串口分流**；
+- **控制面**：手册第 5~15 页全套 AT 指令（MAC / 名称 / 广播 / 波特率 / 广播间隔 /
+  版本 / 功率 / 三条 UUID / 自定义广播数据 / 设备列表 / 断开连接）；
+- **功耗**：BRTS 睡眠脚控制，发送与 AT 前自动唤醒。
 
-| 鎵嬪唽椤?| 鍐呭 | 鏈┍鍔ㄧ殑瀵瑰簲瀹炵幇 |
+业务逻辑（连接管理策略、数据协议封装、低功耗调度、OTA 等）放在 `App/` 层，
+本模块不掺和。
+
+**资料**：`C:\myProjects\PCB_Proj\docs\MX-01P规格书+V0.0.5.pdf`
+
+| 手册页 | 内容 | 本驱动的对应实现 |
 |---|---|---|
-| 绗?3 椤?| 鍑哄巶榛樿鍙傛暟 | 瑙佺 8 鑺傚疄娴嬭〃 |
-| 绗?4 椤?| 寮曡剼瀹氫箟锛圕DS/LINK/FC/BRTS/RES锛?| 瑙?2.1 / 2.2 |
-| 绗?5 椤?| 閫忎紶閫氶亾 FFF0 / FFF1 / FFF2 | 瑙?3.2 |
-| 绗?6~15 椤?| AT 鎸囦护閫愭潯鏍煎紡涓庡簲绛?| `mx01p_read_*` / `mx01p_write_*` |
+| 第 3 页 | 出厂默认参数 | 见第 8 节实测表 |
+| 第 4 页 | 引脚定义（CDS/LINK/FC/BRTS/RES） | 见 2.1 / 2.2 |
+| 第 5 页 | 透传通道 FFF0 / FFF1 / FFF2 | 见 3.2 |
+| 第 6~15 页 | AT 指令逐条格式与应答 | `mx01p_read_*` / `mx01p_write_*` |
 
-鍑哄巶榛樿锛?*115200-8-N-1**銆佸箍鎾紑銆佸箍鎾棿闅?200 ms銆佸姛鐜?0 dBm銆?鏈嶅姟/璇?鍐?UUID = `FFF0/FFF1/FFF2`銆佸悕绉?`NB-<MAC>`銆?
-## 2. 纭欢璇存槑
+出厂默认：**115200-8-N-1**、广播开、广播间隔 200 ms、功率 0 dBm、
+服务/读/写 UUID = `FFF0/FFF1/FFF2`、名称 `NB-<MAC>`。
 
-### 2.1 鎺ュ彛涓庡紩鑴?
-| 淇″彿 | MCU 寮曡剼 | 鏂瑰悜 | 璇存槑 |
+## 2. 硬件说明
+
+### 2.1 接口与引脚
+
+| 信号 | MCU 引脚 | 方向 | 说明 |
 |---|---|---|---|
-| USART1_TX | PA9 (AF7) | MCU 鈫?妯″潡 | 鎺ユā鍧?RXD锛圥in13锛夛紝3.3 V TTL |
-| USART1_RX | PA10 (AF7) | 妯″潡 鈫?MCU | 鎺ユā鍧?TXD锛圥in14锛夛紝3.3 V TTL |
-| BT_RES | PC3 | 杈撳嚭 | 妯″潡 RES锛圥in16锛夛紝**浣庣數骞冲浣?* |
-| BT_BRTS | PA1 | 杈撳嚭 | 妯″潡 BRTS锛圥in15锛夛紝**楂?鎮┖ = 鐫＄湢锛屼綆 = 宸ヤ綔** |
+| USART1_TX | PA9 (AF7) | MCU → 模块 | 接模块 RXD（Pin13），3.3 V TTL |
+| USART1_RX | PA10 (AF7) | 模块 → MCU | 接模块 TXD（Pin14），3.3 V TTL |
+| BT_RES | PC3 | 输出 | 模块 RES（Pin16），**低电平复位** |
+| BT_BRTS | PA1 | 输出 | 模块 BRTS（Pin15），**高/悬空 = 睡眠，低 = 工作** |
 
-- USART1锛?15200-8-N-1锛屾棤纭欢娴佹帶锛屼腑鏂帴鏀讹紙`HAL_UARTEx_ReceiveToIdle_IT`锛?  涓?E22/GPS 鍚屼竴濂楀啓娉曪級锛孖RQ 浼樺厛绾?10銆?- `Core/Src/gpio.c` 涓婄數鎶?`BT_RES` 鍒濆鍖栦负**浣庣數骞?*锛堟ā鍧椾竴鐩村浜庡浣嶆€侊級锛?  蹇呴』鐢?`mx01p_init()` 閲婃斁锛涘悓鏃舵妸 `BT_BRTS` 鍒濆鍖栨垚**浣庣數骞?*锛堟ā鍧楀伐浣滄€侊級锛?  杩欎竴鐐瑰緢鍏抽敭锛欱RTS 涓€鏃︽偓绌烘垨鎷夐珮锛屾ā鍧椾細鐫¤繃鍘伙紝`+READY` 姘歌繙绛変笉鍒般€?- 妯″潡 VCC 鐢?`PW_EN` 鎺у埗鐨勭數婧愯建渚涚數锛坄main.c` 鍦ㄥ垵濮嬪寲鍓嶆媺楂橈級锛岄┍鍔ㄤ笉纰?PW_EN銆?
-### 2.2 鏈澘娌℃湁鎺ョ殑涓夋牴绾匡紙鍐冲畾浜嗛┍鍔ㄧ殑鑳藉姏杈圭晫锛?
-| 妯″潡鑴?| 鎵嬪唽璇箟 | 鏈澘 | 椹卞姩鍚庢灉 |
+- USART1：115200-8-N-1，无硬件流控，中断接收（`HAL_UARTEx_ReceiveToIdle_IT`，
+  与 E22/GPS 同一套写法），IRQ 优先级 10。
+- `Core/Src/gpio.c` 上电把 `BT_RES` 初始化为**低电平**（模块一直处于复位态），
+  必须由 `mx01p_init()` 释放；同时把 `BT_BRTS` 初始化成**低电平**（模块工作态），
+  这一点很关键：BRTS 一旦悬空或拉高，模块会睡过去，`+READY` 永远等不到。
+- 模块 VCC 由 `PW_EN` 控制的电源轨供电（`main.c` 在初始化前拉高），驱动不碰 PW_EN。
+
+### 2.2 本板没有接的三根线（决定了驱动的能力边界）
+
+| 模块脚 | 手册语义 | 本板 | 驱动后果 |
 |---|---|---|---|
-| CDS (IO22) | 楂?鎮┖ = AT 鍛戒护鏈夋晥锛岄潪 AT 鏁版嵁閫忎紶锛涗綆 = AT 鍏抽棴 | 鎮┖ = 楂?| **AT 鎸囦护濮嬬粓鏈夋晥**锛氫互 `AT+` 寮€澶寸殑杞借嵎浼氳妯″潡褰撳懡浠ゅ悆鎺夛紙瑙?10.2锛?|
-| LINK (IO21) | 宸茶繛鎺ヨ緭鍑洪珮锛屾湭杩炴帴杈撳嚭浣?| 鎮┖ | 杩炴帴鐘舵€佸彧鑳介潬 `+CONNECTED`/`+DISCONN` 浜嬩欢涓?`AT+DEV?` 璺熻釜 |
-| FC (IO20) | 楂?= 妯″潡涓嶅厑璁?MCU 缁х画鍙戜覆鍙ｆ暟鎹?| 鎮┖ | 娌℃湁纭欢鑳屽帇锛屽彂閫佽妭濂忕敱涓婂眰鎺у埗锛圔LE 杩炴帴闂撮殧 30 ms锛?|
+| CDS (IO22) | 高/悬空 = AT 命令有效，非 AT 数据透传；低 = AT 关闭 | 悬空 = 高 | **AT 指令始终有效**：以 `AT+` 开头的载荷会被模块当命令吃掉（见 10.2） |
+| LINK (IO21) | 已连接输出高，未连接输出低 | 悬空 | 连接状态只能靠 `+CONNECTED`/`+DISCONNECTED` 事件与 `AT+DEV?` 跟踪 |
+| FC (IO20) | 高 = 模块不允许 MCU 继续发串口数据 | 悬空 | 没有硬件背压，发送节奏由上层控制（BLE 连接间隔 30 ms） |
 
-### 2.3 澶嶄綅涓庝笂鐢垫椂搴?
-| 鍦烘櫙 | 澶勭悊 | 鏁板€兼潵婧?|
+### 2.3 复位与上电时序
+
+| 场景 | 处理 | 数值来源 |
 |---|---|---|
-| RES 浣庣數骞充繚鎸?| `MX01P_RESET_LOW_MS = 10 ms` | 鎵嬪唽鍙啓"鎷変綆澶嶄綅"锛屾棤涓嬮檺锛屽彇淇濆畧鍊?|
-| 澶嶄綅閲婃斁 鈫?`+READY` | 椹卞姩杞绛夊緟锛岄粯璁や笂闄?3000 ms | 鎵嬪唽绗?6 椤靛娉?涓婄數鎴栭噸鍚垚鍔熲€︽敹鍒?+READY 鍚庢墠鑳芥墽琛屾寚浠ゅ拰鏁颁紶" |
-| BRTS 鍞ら啋 鈫?鍙彂閫?| `MX01P_WAKE_MS = 10 ms` | 鎵嬪唽鏈粰锛屽疄娴?10 ms 绋冲畾锛堢 8 鑺傦級 |
+| RES 低电平保持 | `MX01P_RESET_LOW_MS = 10 ms` | 手册只写"拉低复位"，无下限，取保守值 |
+| 复位释放 → `+READY` | 驱动轮询等待，默认上限 3000 ms | 手册第 6 页备注"上电或重启成功…收到 +READY 后才能执行指令和数传" |
+| BRTS 唤醒 → 可发送 | `MX01P_WAKE_MS = 10 ms` | 手册未给，实测 10 ms 稳定（第 8 节） |
 
-鏈澘瀹炴祴锛氬浣嶉噴鏀惧埌 `+READY` 绾?**795~827 ms**锛圔LE 鍗忚鏍堝惎鍔ㄨ€楁椂锛夛紝
-涓?`ready_ms` 瀛楁涓€鑷淬€?
-## 3. 鍗忚瑕佺偣
+本板实测：复位释放到 `+READY` 约 **795~827 ms**（BLE 协议栈启动耗时），
+与 `ready_ms` 字段一致。
 
-### 3.1 AT 涓庡紓姝ヤ簨浠?
-- 鍛戒护缁熶竴 `<CMD>\r\n`锛坄0x0D 0x0A` 缁撳熬锛夈€?- 璁剧疆绫诲洖 `OK\r\n` / `ERROR\r\n`锛涙煡璇㈢被鍥?`+KEY:VALUE\r\n`锛坄+NAME: xxx`銆?  `+UART: NUM` 杩欑被甯︾┖鏍肩殑锛岄┍鍔ㄧ粺涓€璺崇┖鏍煎悗鍙栧€硷級銆?- 涓夌寮傛浜嬩欢锛屽彲鑳藉湪浠绘剰鏃跺埢鎻掕繘鏉ワ細
+## 3. 协议要点
 
-| 浜嬩欢 | 鍚箟 | 椹卞姩鍔ㄤ綔 |
+### 3.1 AT 与异步事件
+
+- 命令统一 `<CMD>\r\n`（`0x0D 0x0A` 结尾）。
+- 设置类回 `OK\r\n` / `ERROR\r\n`；查询类回 `+KEY:VALUE\r\n`（`+NAME: xxx`、
+  `+UART: NUM` 这类带空格的，驱动统一跳空格后取值）。
+- 三种异步事件，可能在任意时刻插进来：
+
+| 事件 | 实测原文（固件 V0.0.8） | 驱动动作 |
 |---|---|---|
-| `+READY` | 涓婄數/閲嶅惎瀹屾垚 | 缃?`ready_edge`锛屽洖璋?`MX01P_EVENT_READY` |
-| `+CONNECTED:TYP,MAC` | 涓绘満杩炰笂 | 鏇存柊 `link_up/link_type/link_mac`锛屽洖璋?|
-| `+DISCONN:TYP,MAC` | 杩炴帴鏂紑 | 鍚屼笂 |
+| 上电/重启完成 | `+READY` | 置 `ready_edge`，回调 `MX01P_EVENT_READY` |
+| 主机连上 | `+CONNECTED:1,A08069F43EA8` | 更新 `link_up/link_type/link_mac`，回调 |
+| 连接断开 | `+DISCONNECTED:1,A08069F43EA8` | 同上，`link_up = 0` |
 
-`TYP = 1` 琛ㄧず杩炴帴鏂逛负涓绘満锛堟墜鏈猴級锛宍MAC` 涓哄绔?12 浣嶅崄鍏繘鍒跺湴鍧€銆?
-### 3.2 鏁版嵁娴佸悜锛堢 5 椤?BLE 鍗忚璇存槑锛?
+> **手册与实物不一致**：手册写 `+DISCONN:TYP,MAC`，实测固件发的是
+> `+DISCONNECTED:`。驱动按**名字前缀**匹配（`CONNECT` / `DISCONN`），两种拼写都认，
+> 冒号位置不写死。这条差异是上板联调才发现的，见 10.7。
+
+`TYP = 1` 表示连接方为主机（手机/PC），`MAC` 为对端 12 位十六进制地址；
+Windows 连 BLE 时用的是随机私有地址，与网卡本身的 MAC 不同。
+
+### 3.2 数据流向（第 5 页 BLE 协议说明）
+
 ```
-鎵嬫満 --鍐?FFF2--> 妯″潡 --涓插彛 TX--> MCU       锛圓PP 鍙戠粰 MCU锛?MCU --涓插彛 RX--> 妯″潡 --閫氱煡 FFF1--> 鎵嬫満      锛圡CU 鍙戠粰 APP锛?```
+手机 --写 FFF2--> 模块 --串口 TX--> MCU       （APP 发给 MCU）
+MCU --串口 RX--> 模块 --通知 FFF1--> 手机      （MCU 发给 APP）
+```
 
-鍗筹細**MCU 寰€涓插彛鍐?= 鎵嬫満鏀跺埌閫氱煡锛涙墜鏈哄啓 FFF2 = MCU 浠庝覆鍙ｈ**銆?椹卞姩鍙仛閫忎紶锛屼笉瑙ｆ瀽涓氬姟鍐呭锛汳TU 鍒嗗寘鐢辨ā鍧楄嚜宸卞畬鎴愩€?
-## 4. 鏈増鑼冨洿
+即：**MCU 往串口写 = 手机收到通知；手机写 FFF2 = MCU 从串口读**。
+驱动只做透传，不解析业务内容；MTU 分包由模块自己完成。
 
-| 缁村害 | v1锛堝綋鍓嶅疄鐜帮級 | 璇存槑 |
+PC 实测发现模块还暴露了手册第 5 页提到的 IO 控制通道（服务 `F000`，
+`F001`/`F002` 写 `01`/`00` 控制模块的 IO1/IO2 电平）。本板没把这两根 IO 引出，
+驱动不提供该功能。
+
+## 4. 本版范围
+
+| 维度 | v1（当前实现） | 说明 |
 |---|---|---|
-| 澶嶄綅 | RES 纭浣?+ `AT+REBOOT` 杞浣?+ `AT+RESET` 鎭㈠鍑哄巶 | 閮借绛?`+READY` |
-| 鍙戦€?| 闃诲鍙戦€侊紝鍗曟 鈮?512 B | 瓒呰繃杩斿洖 `MX01P_ERR_PARAM`锛涜儗鍘嬮潬涓婂眰 |
-| 鎺ユ敹 | IDLE 涓柇 + 1 KB 鐜舰缂撳啿 + 鍒嗗眰鍒嗘祦 | 婊℃椂涓㈡柊鏁版嵁锛屼笉瑕嗙洊鏈秷璐规暟鎹?|
-| 鍙傛暟 | 鎵嬪唽鍏ㄥ AT锛歁AC/鍚嶇О/骞挎挱/娉㈢壒鐜?闂撮殧/鐗堟湰/鍔熺巼/涓夋潯 UUID/骞挎挱鏁版嵁 | 鍐欐尝鐗圭巼鍙帴鍙?115200锛堣 2.2銆?0.4锛?|
-| 鐫＄湢 | BRTS 鎺у埗 + 鍙戦€?AT 鍓嶈嚜鍔ㄥ敜閱?| 鐫＄湢鏃舵ā鍧椾笉鑳藉彂涓插彛锛堟墜鍐?Pin15锛?|
-| 鑷 | `mx01p_probe()`锛歩nit + 13 椤?AT + 鐫＄湢鑴?+ 鏁版嵁鍥炵幆 + 杞浣?| 缁撴灉鐣欏叏灞€鍙橀噺渚?J-Link 璇?|
+| 复位 | RES 硬复位 + `AT+REBOOT` 软复位 + `AT+RESET` 恢复出厂 | 都要等 `+READY` |
+| 发送 | 阻塞发送，单次 ≤ 512 B | 超过返回 `MX01P_ERR_PARAM`；背压靠上层 |
+| 接收 | IDLE 中断 + 1 KB 环形缓冲 + 分层分流 | 满时丢新数据，不覆盖未消费数据 |
+| 参数 | 手册全套 AT：MAC/名称/广播/波特率/间隔/版本/功率/三条 UUID/广播数据 | 写波特率只接受 115200（见 10.4） |
+| 睡眠 | BRTS 控制 + 发送/AT 前自动唤醒 | 睡眠时模块不能发串口（手册 Pin15） |
+| 自检 | `mx01p_probe()`：init + 13 项 AT + 睡眠脚 + 数据回环 + 软复位 | 结果留全局变量供 J-Link 读 |
 
-**涓嶅湪鏈増**锛氬杩炴帴绠＄悊绛栫暐銆佽繛鎺ュ弬鏁板崗鍟嗭紙杩炴帴闂撮殧/MTU 鏃?AT 鎸囦护鍙皟锛夈€?鑷畾涔夊箍鎾暟鎹互澶栫殑骞挎挱鍖呭瓧娈点€丱TA 鍥轰欢鍗囩骇銆佹柇绾胯嚜鍔ㄩ噸杩炪€?
-## 5. 杞欢鏋舵瀯
+**不在本版**：多连接管理策略、连接参数协商（连接间隔/MTU 无 AT 指令可调）、
+自定义广播数据以外的广播包字段、OTA 固件升级、断线自动重连、IO1/IO2 控制。
 
-### 5.1 鏂囦欢鍒掑垎
+## 5. 软件架构
 
-| 鏂囦欢 | 鑱岃矗 |
+### 5.1 文件划分
+
+| 文件 | 职责 |
 |---|---|
-| `mx01p.c/.h` | 椹卞姩鏍稿績锛氱敓鍛藉懆鏈熴€丷X 鍒嗘祦鍣ㄣ€佸悓姝?AT 寮曟搸銆佸弬鏁拌鍐欍€佺潯鐪犮€佽嚜妫€銆?*绾?C锛屼笉 include HAL/RTOS 澶存枃浠?* |
-| `mx01p_port.c/.h` | 骞冲彴绉绘灞傦細USART1 涓柇鏀跺彂銆丷ES/BRTS 鎺у埗銆丠AL tick/delay銆佷复鐣屽尯銆?*鍞竴鍏佽鎺ヨЕ HAL 鐨勬枃浠?* |
-| `CMakeLists.txt` | target `mx01p`锛屾敞鍐岃繘 `BSP_LIBS`锛坄BSP/CMakeLists.txt`锛?|
+| `mx01p.c/.h` | 驱动核心：生命周期、RX 分流器、同步 AT 引擎、参数读写、睡眠、自检。**纯 C，不 include HAL/RTOS 头文件** |
+| `mx01p_port.c/.h` | 平台移植层：USART1 中断收发、RES/BRTS 控制、HAL tick/delay、临界区。**唯一允许接触 HAL 的文件** |
+| `CMakeLists.txt` | target `mx01p`，注册进 `BSP_LIBS`（`BSP/CMakeLists.txt`） |
 
-椹卞姩鏍稿績涓庣Щ妞嶅眰涔嬮棿鍙€氳繃 `mx01p_port.h` 鐨勪竴缁勫嚱鏁颁氦浜掞紝绛惧悕涓嶅惈 HAL 绫诲瀷锛?鎹?MCU/鎹覆鍙ｅ彧鏀?`mx01p_port.c`銆?
-### 5.2 鏁版嵁娴?
+驱动核心与移植层之间只通过 `mx01p_port.h` 的一组函数交互，签名不含 HAL 类型；
+换 MCU/换串口只改 `mx01p_port.c`。
+
+### 5.2 数据流
+
 ```mermaid
 flowchart LR
-    A[MX-01P 妯″潡] -->|TXD 鈫?USART1_RX| B["HAL_UARTEx_RxEventCallback<br/>mx01p_port_rx_event"]
-    B --> C["mx01p_rx_feed 鍒嗘祦鍣?br/>锛圛SR锛?]
-    C -->|鎺у埗琛寍 D[搴旂瓟閭 / 浜嬩欢鍥炶皟]
-    C -->|閫忎紶鏁版嵁| E["鐜舰缂撳啿 1 KB<br/>婊″垯涓㈡柊鏁版嵁"]
-    E -->|mx01p_read| F[App 绾跨▼]
-    F -->|mx01p_send| G["BRTS 鍞ら啋 鈫?HAL_UART_Transmit"]
+    A[MX-01P 模块] -->|TXD → USART1_RX| B["HAL_UARTEx_RxEventCallback<br/>mx01p_port_rx_event"]
+    B --> C["mx01p_rx_feed 分流器<br/>（ISR）"]
+    C -->|控制行| D[应答邮箱 / 事件回调]
+    C -->|透传数据| E["环形缓冲 1 KB<br/>满则丢新数据"]
+    E -->|mx01p_read| F[App 线程]
+    F -->|mx01p_send| G["BRTS 唤醒 → HAL_UART_Transmit"]
     G --> A
-    D --> H["mx01p_exchange<br/>鍚屾 AT 浜嬪姟"]
+    D --> H["mx01p_exchange<br/>同步 AT 事务"]
 ```
 
-### 5.3 骞跺彂涓庝緷璧?
-- 渚濊禆鏂瑰悜锛歚App` 鈫?`mx01p`锛坈ore锛夆啋 `mx01p_port` 鈫?HAL銆俢ore 涓?include 浠讳綍 HAL 澶存枃浠躲€?- **鎺ユ敹鏄?SPSC**锛歊X 涓柇鍙啓 `rx_head`锛屾秷璐圭嚎绋嬪彧鍐?`rx_tail`銆?- **鍒嗘祦鍣ㄤ笌璇荤紦鍐茬殑浜ゆ帴鐢ㄧ煭涓寸晫鍖?*锛歚mx01p_poll()` 鎶?鍋滃湪鍊欓€夎閲岀殑灏惧反"鍐茶繘
-  鐜舰缂撳啿鏃朵細鍐?`rx_head`锛屽洜姝ょ敤 `mx01p_port_irq_lock()` 鍖呬綇锛堝彧鏈夊嚑鍗佹潯鎸囦护锛夈€?- **AT 浜嬪姟鏄悓姝ヤ笖鐙崰鐨?*锛歚at_pending` 鏈熼棿鍐嶆潵涓€鏉?AT 鐩存帴杩斿洖
-  `MX01P_ERR_STATE`锛汚T 绫?API 涓庢暟鎹被 API **涓嶈兘**鍦ㄤ袱涓嚎绋嬮噷骞跺彂璋冪敤銆?  寤鸿鐢?App 鐨勪竴涓摑鐗欑嚎绋嬬嫭鍗犻┍鍔ㄣ€?- `mx01p_init()/mx01p_probe()` 鍦ㄤ富寰幆锛坄tx_kernel_enter()` 涔嬪墠锛夋墽琛岋紝鍐呴儴鍙敤
-  `HAL_Delay` 涓庤疆璇紝涓嶄緷璧?RTOS锛汚T 绛夊緟寰幆鍚屾牱鏄?`HAL_Delay(1)` 杞
-  锛堜笌 E22 涓€鑷达級锛屼笉瑕佸湪浼樺厛绾ч珮浜庤皟搴﹀櫒鍏抽敭绾跨▼鐨勫湴鏂归暱鏃堕棿璋冪敤銆?
-## 6. API 濂戠害
+### 5.3 并发与依赖
 
-### 6.1 鏁版嵁绫诲瀷
+- 依赖方向：`App` → `mx01p`（core）→ `mx01p_port` → HAL。core 不 include 任何 HAL 头文件。
+- **接收是 SPSC**：RX 中断只写 `rx_head`，消费线程只写 `rx_tail`。
+- **分流器与读缓冲的交接用短临界区**：`mx01p_poll()` 把"停在候选行里的尾巴"冲进
+  环形缓冲时会写 `rx_head`，因此用 `mx01p_port_irq_lock()` 包住（只有几十条指令）。
+- **AT 事务是同步且独占的**：`at_pending` 期间再来一条 AT 直接返回
+  `MX01P_ERR_STATE`；AT 类 API 与数据类 API **不能**在两个线程里并发调用。
+  建议由 App 的一个蓝牙线程独占驱动。
+- `mx01p_init()/mx01p_probe()` 在主循环（`tx_kernel_enter()` 之前）执行，内部只用
+  `HAL_Delay` 与轮询，不依赖 RTOS；AT 等待循环同样是 `HAL_Delay(1)` 轮询
+  （与 E22 一致），不要在优先级高于调度器关键线程的地方长时间调用。
+
+## 6. API 契约
+
+### 6.1 数据类型
 
 ```c
 typedef struct {
-  uint8_t *rx_ring;          /* 璋冪敤鑰呭垎閰嶏紝瀹归噺蹇呴』鏄?2 鐨勫箓 */
-  uint16_t rx_ring_size;     /* 寤鸿 1024 */
-  mx01p_event_cb_t evt_cb;   /* 鍙€変簨浠跺洖璋冿紙READY / CONNECTED / DISCONN锛?*/
+  uint8_t *rx_ring;          /* 调用者分配，容量必须是 2 的幂 */
+  uint16_t rx_ring_size;     /* 建议 1024 */
+  mx01p_event_cb_t evt_cb;   /* 可选事件回调（READY / CONNECTED / DISCONN） */
   void *user;
-  uint32_t ready_timeout_ms; /* 0 = 榛樿 3000 ms */
+  uint32_t ready_timeout_ms; /* 0 = 默认 3000 ms */
 } mx01p_cfg_t;
 
-/* 浜嬩欢鍥炶皟锛欵VENT 绫诲瀷 + TYP + MAC锛圡AC 鎸囬拡浠呭湪鍥炶皟鏈熼棿鏈夋晥锛?*/
+/* 事件回调：EVENT 类型 + TYP + MAC（MAC 指针仅在回调期间有效） */
 typedef void (*mx01p_event_cb_t)(mx01p_t *inst, mx01p_event_t event,
                                  uint8_t link_type, const char *mac);
 ```
 
-杩斿洖鍊肩粺涓€涓?`mx01p_status_t`锛堣礋鍊煎嵆閿欒锛夛細`OK / ERR_PARAM / ERR_TIMEOUT /
-ERR_IO / ERR_PROTOCOL / ERR_STATE / ERR_NOMEM`銆?
-### 6.2 鎺ュ彛鍑芥暟
+返回值统一为 `mx01p_status_t`（负值即错误）：`OK / ERR_PARAM / ERR_TIMEOUT /
+ERR_IO / ERR_PROTOCOL / ERR_STATE / ERR_NOMEM`。
+
+### 6.2 接口函数
 
 ```c
-/* 鐢熷懡鍛ㄦ湡 */
+/* 生命周期 */
 mx01p_status_t mx01p_init(mx01p_t *inst, const mx01p_cfg_t *cfg);
 mx01p_status_t mx01p_reset(mx01p_t *inst);
 mx01p_status_t mx01p_reboot(mx01p_t *inst);
 mx01p_status_t mx01p_restore(mx01p_t *inst);
 
-/* 鐫＄湢涓庨摼璺姸鎬?*/
+/* 睡眠与链路状态 */
 mx01p_status_t mx01p_set_sleep(mx01p_t *inst, bool sleep);
 bool  mx01p_is_asleep(const mx01p_t *inst);
 bool  mx01p_is_connected(const mx01p_t *inst);
 void  mx01p_get_link(const mx01p_t *inst, uint8_t *link_type, char *mac);
 
-/* 鏁版嵁闈?*/
+/* 数据面 */
 mx01p_status_t mx01p_send(mx01p_t *inst, const uint8_t *data, uint16_t len, uint32_t timeout_ms);
 uint16_t mx01p_read(mx01p_t *inst, uint8_t *buf, uint16_t max_len);
 uint16_t mx01p_available(const mx01p_t *inst);
 void     mx01p_flush_rx(mx01p_t *inst);
 
-/* 閫氱敤 AT */
+/* 通用 AT */
 mx01p_status_t mx01p_at_query(mx01p_t *inst, const char *cmd, const char *key,
                               char *out, uint16_t out_size, uint32_t timeout_ms);
 mx01p_status_t mx01p_at_exec(mx01p_t *inst, const char *cmd, uint32_t timeout_ms);
 
-/* 鍙傛暟蹇嵎鎺ュ彛锛堣秴鏃剁粺涓€ MX01P_AT_TIMEOUT_MS = 500 ms锛?*/
+/* 参数快捷接口（超时统一 MX01P_AT_TIMEOUT_MS = 500 ms） */
 mx01p_status_t mx01p_read_mac/write_mac(...);       /* AT+MAC? / AT+MAC= */
 mx01p_status_t mx01p_read_name/write_name(...);     /* AT+NAME? / AT+NAME= */
 mx01p_status_t mx01p_read_adv/set_adv(...);         /* AT+ADV? / AT+ADV= */
@@ -165,13 +214,13 @@ mx01p_status_t mx01p_read/write_adv_data(...);      /* AT+AMDATA */
 mx01p_status_t mx01p_disconnect(mx01p_t*, uint8_t mode); /* AT+DISCONN= */
 mx01p_status_t mx01p_read_link(mx01p_t*, uint8_t *typ, char *mac); /* AT+DEV? */
 
-/* 涓柇/杞 + 鑷 */
+/* 中断/轮询 + 自检 */
 void mx01p_rx_feed(mx01p_t *inst, const uint8_t *data, uint16_t len);
 void mx01p_poll(mx01p_t *inst);
 bool mx01p_probe(mx01p_t *inst, const mx01p_cfg_t *cfg, mx01p_probe_t *out);
 ```
 
-### 6.3 浣跨敤绀轰緥
+### 6.3 使用示例
 
 ```c
 static uint8_t g_bt_rx_ring[1024];
@@ -179,9 +228,11 @@ static mx01p_t g_bt;
 
 static void bt_evt(mx01p_t *inst, mx01p_event_t ev, uint8_t typ, const char *mac)
 {
-  /* ISR 涓婁笅鏂囷細鍙疆鏍囧織 */
+  /* ISR 上下文：只置标志 */
   if (ev == MX01P_EVENT_CONNECTED) {
     g_bt_connected = true;
+  } else if (ev == MX01P_EVENT_DISCONNECTED) {
+    g_bt_connected = false;
   }
 }
 
@@ -194,9 +245,9 @@ void app_bt_init(void)
   };
 
   if (mx01p_init(&g_bt, &cfg) != MX01P_OK) {
-    /* 鏌?VCC / RES / USART1=115200 */
+    /* 查 VCC / RES / USART1=115200 */
   }
-  (void)mx01p_write_name(&g_bt, "HardBrick");   /* 绔嬪嵆鐢熸晥 */
+  (void)mx01p_write_name(&g_bt, "HardBrick");   /* 立即生效 */
 }
 
 void app_bt_thread_entry(void)
@@ -206,48 +257,59 @@ void app_bt_thread_entry(void)
   for (;;) {
     uint16_t n = mx01p_read(&g_bt, buf, sizeof(buf));
     if (n != 0u) {
-      /* 鎵嬫満鍐?FFF2 鐨勬暟鎹?*/
+      /* 手机写 FFF2 的数据 */
     }
-    if (/* 鏈夊緟鍙戞暟鎹?*/) {
-      (void)mx01p_send(&g_bt, tx, tx_len, 100u);   /* 璧?FFF1 閫氱煡缁欐墜鏈?*/
+    if (/* 有待发数据 */) {
+      (void)mx01p_send(&g_bt, tx, tx_len, 100u);   /* 走 FFF1 通知给手机 */
     }
     tx_thread_sleep(1);   /* 10 ms */
   }
 }
 ```
 
-## 7. RX 鍒嗘祦瑙勫垯锛堟湰椹卞姩鐨勬牳蹇冭璁＄偣锛?
-鏈澘 CDS 鎮┖锛屾墍浠?**AT 搴旂瓟涓庢墜鏈洪€忎紶鏁版嵁鍦ㄥ悓涓€鏍?RX 绾夸笂浜ら敊鍑虹幇**锛?椹卞姩鎸夎鍋氬垎娴侊紙`mx01p_rx_feed` / `mx01p_line_complete`锛夛細
+## 7. RX 分流规则（本驱动的核心设计点）
 
-| 鏀跺埌鐨勫唴瀹?| 鍒ゅ畾 | 鍘诲悜 |
+本板 CDS 悬空，所以 **AT 应答与手机透传数据在同一根 RX 线上交错出现**，
+驱动按行做分流（`mx01p_rx_feed` / `mx01p_line_complete`）：
+
+| 收到的内容 | 判定 | 去向 |
 |---|---|---|
-| 琛岄涓嶆槸 `+` / `O` / `E` | 涓€瀹氫笉鏄帶鍒惰 | **閫愬瓧鑺傜洿鎺ヨ繘鏁版嵁缂撳啿**锛堥浂寤惰繜锛?|
-| `+READY` | 寮傛浜嬩欢 | `ready_edge` + 鍥炶皟 |
-| `+CONNECTED:鈥 / `+DISCONN:鈥 | 寮傛浜嬩欢 | 鏇存柊閾捐矾鐘舵€?+ 鍥炶皟 |
-| 鍏跺畠 `+鈥 琛岋紝涓?*鏈?AT 浜嬪姟鍦ㄧ瓑** | AT 搴旂瓟 | 搴旂瓟閭锛堝幓 CRLF锛?|
-| 鍏跺畠 `+鈥 琛岋紝**绌洪棽鏃?* | 浠?`+` 寮€澶寸殑浜岃繘鍒惰浇鑽?| 閫€鍥炴暟鎹紦鍐?|
-| `OK` / `ERROR`锛屼笖鏈?AT 浜嬪姟鍦ㄧ瓑 | AT 搴旂瓟 | 搴旂瓟閭 |
-| 鍊欓€夎瓒呰繃 `MX01P_RX_IDLE_FLUSH_MS`(5 ms) 娌″姩闈?| 涓嶅彲鑳芥槸瀹屾暣鎺у埗琛?| 鏁翠綋閫€鍥炴暟鎹紦鍐?|
-| 鍊欓€夎瓒呰繃 95 瀛楄妭 | 鎵嬪唽鏈€闀垮簲绛斾篃瑁呭緱涓?| 鏁翠綋閫€鍥炴暟鎹紦鍐插苟鏀逛负鐩撮€?|
+| 行首不是 `+` / `O` / `E` | 一定不是控制行 | **逐字节直接进数据缓冲**（零延迟） |
+| `+READY` | 异步事件 | `ready_edge` + 回调 |
+| `+CONNECT…:` / `+DISCONN…:` | 异步事件 | 更新链路状态 + 回调 |
+| 其它 `+…` 行，且**有 AT 事务在等** | AT 应答 | 应答邮箱（去 CRLF） |
+| 其它 `+…` 行，**空闲时** | 以 `+` 开头的二进制载荷 | 退回数据缓冲 |
+| `OK` / `ERROR`，且有 AT 事务在等 | AT 应答 | 应答邮箱 |
+| 候选行超过 `MX01P_RX_IDLE_FLUSH_MS`(5 ms) 没动静 | 不可能是完整控制行 | 整体退回数据缓冲 |
+| 候选行超过 95 字节 | 手册最长应答也装得下 | 整体退回数据缓冲并改为直通 |
 
-鍥犳锛氭櫘閫氫簩杩涘埗杞借嵎闆堕澶栧欢杩燂紱鍙湁**浠?`+`/`O`/`E` 寮€澶翠笖涓嶅惈 `\n`** 鐨勮浇鑽?鏈€澶氭櫄 5 ms 鍒拌揪銆傝繖涓唬浠锋槸涓轰簡涓嶅悶鎺夊紓姝ヤ簨浠讹紝宸插湪绗?8 鑺傜敤鍥炵幆瀹炴祴楠岃瘉銆?
-## 8. 涓婄數鑷涓庡疄娴嬬粨鏋?
-`main.c` 鍦?`tx_kernel_enter()` 涔嬪墠璋冪敤 `bt_selftest()` 鈫?`mx01p_probe()`銆?缁撴灉鍚屾椂鍐欒繘**鍏ㄥ眬** `g_bt_probe`锛堝埢鎰忎笉鍔?`static`锛夛紝J-Link 鐩存帴鎸夌鍙疯锛?
+因此：普通二进制载荷零额外延迟；只有**以 `+`/`O`/`E` 开头且不含 `\n`** 的载荷
+最多晚 5 ms 到达。这个代价是为了不吞掉异步事件，已在第 8 节用回环实测验证。
+
+## 8. 实测
+
+### 8.1 上电自检（J-Link 读 `g_bt_probe`）
+
+`main.c` 在 `tx_kernel_enter()` 之前调用 `bt_selftest()` → `mx01p_probe()`。
+结果同时写进**全局** `g_bt_probe`（刻意不加 `static`），J-Link 直接按符号读：
+
 ```
 stage = 5        init_st = 0       ready_ms = 795~827   reset_retry = 0
 mac = "C329B0CFB3DB"              name = "NB-C329B0CFB3DB"
 version = "V0.0.8"                baud_code = 5 (115200)
 adv_on = 1        interval_ms = 200      power_code = 5 (0 dBm)
 uuid = FFF0 / FFF1 / FFF2
-link_st = -4锛堟棤鎵嬫満鍦ㄦ梺锛屽睘棰勬湡锛屼笉璁″け璐ワ級
-sleep_st = 0      sleep_blocked = 1  鈫?BRTS 鐫＄湢鑴氭湁鏁?loop_st = 0       loopback = "+VER:V0.0.8\r\n"  鈫?鏁版嵁閫氳矾鍥炵幆
-reboot_st = 0     鈫?杞浣嶅悗閲嶆柊绛夊埌 +READY
+link_st = -4（无手机在旁，属预期，不计失败）
+sleep_st = 0      sleep_blocked = 1  ← BRTS 睡眠脚有效
+loop_st = 0       loopback = "+VER:V0.0.8\r\n"  ← 数据通路回环
+reboot_st = 0     ← 软复位后重新等到 +READY
 at_total = 14     at_fail = 0   rx_dropped = 0   resp_overrun = 0
 ```
 
-RTT 杈撳嚭褰㈠锛?
+RTT 输出形如：
+
 ```
-[BT] probe=1 stage=5 init=0 ready=805 ms retry=0
+[BT] probe=1 stage=5 init=0 ready=795 ms retry=0
 [BT] mac=C329B0CFB3DB(0) name=NB-C329B0CFB3DB(0)
 [BT] ver=V0.0.8(0)
 [BT] uart=115200 code=5(0) adv=1(0) aintvl=200 ms(0)
@@ -260,37 +322,91 @@ RTT 杈撳嚭褰㈠锛?
 [BT] at=14 fail=0 drop=0 overrun=0
 ```
 
-瀹炴祴鏂规硶锛歚mcu_flash` 鐑у綍鍚庣瓑 8 s锛岀敤 J-Link 璇?`g_bt_probe`锛?杩炵画涓ゆ纭浣嶇粨鏋滀竴鑷达紙`ready_ms` 805 / 827 ms锛夈€?
-楠屾敹娓呭崟锛?
-- [x] `mx01p_init()` 鑳介噴鏀?RES 骞剁瓑鍒?`+READY`锛宍ready_ms` 绋冲畾鍦?0.8 s 宸﹀彸锛?- [x] 13 鏉?AT 鏌ヨ鍏ㄩ儴鎴愬姛锛歁AC / 鍚嶇О / 鐗堟湰 / 娉㈢壒鐜?/ 骞挎挱 / 闂撮殧 / 鍔熺巼 / 涓夋潯 UUID / 璁惧鍒楄〃锛?- [x] `AT+UART?` 杩斿洖鐮佸€?5锛?15200锛夛紝涓?CubeMX 鐨?USART1 涓€鑷达紱
-- [x] UUID 涓哄嚭鍘?`FFF0/FFF1/FFF2`锛屽悕绉扮鍚堟墜鍐岀殑 `NB-<MAC>` 榛樿瑙勫垯锛?- [x] BRTS 鎷夐珮鍚?`AT+MAC?` 鏃犲簲绛斻€佹媺浣庡悗鎭㈠ 鈫?鐫＄湢鑴氭柟鍚戞纭紱
-- [x] 浠庢暟鎹€氳矾鍙?`AT+VER?` 鑳芥妸 `+VER:V0.0.8\r\n` 褰撹浇鑽锋敹鍥炴潵 鈫?鍙戦€併€佸垎娴併€佹帴鏀朵笁娈甸兘閫氾紱
-- [x] `AT+REBOOT=1` 鍚庤兘閲嶆柊绛夊埌 `+READY` 骞剁户缁煡璇紱
-- [x] 鍏ㄧ▼ `rx_dropped = 0`銆乣resp_overrun = 0`锛堝垎娴佹病鏈変涪瀛楄妭銆佹病鏈夋姠閭锛夛紱
-- [ ] **涓庢墜鏈哄疄娴嬮€忎紶**锛欰PP 鍐?FFF2 鈫?`mx01p_read()` 鏀跺埌锛沗mx01p_send()` 鈫?APP 鏀跺埌閫氱煡
-      锛堥渶瑕佹墜鏈哄湪鏃侊紝瑙?10.5锛夛紱
-- [ ] 闀挎椂闂磋繍琛岋紙>1 h锛塦rx_dropped` 涓嶅闀裤€?
-## 9. 閿欒澶勭悊
+自检覆盖项：
 
-| 鍦烘櫙 | 澶勭悊 |
+- [x] `mx01p_init()` 能释放 RES 并等到 `+READY`，`ready_ms` 稳定在 0.8 s 左右；
+- [x] 13 条 AT 查询全部成功：MAC / 名称 / 版本 / 波特率 / 广播 / 间隔 / 功率 / 三条 UUID / 设备列表；
+- [x] `AT+UART?` 返回码值 5（115200），与 CubeMX 的 USART1 一致；
+- [x] UUID 为出厂 `FFF0/FFF1/FFF2`，名称符合手册的 `NB-<MAC>` 默认规则；
+- [x] BRTS 拉高后 `AT+MAC?` 无应答、拉低后恢复 → 睡眠脚方向正确；
+- [x] 从数据通路发 `AT+VER?` 能把 `+VER:V0.0.8\r\n` 当载荷收回来 → 发送、分流、接收三段都通；
+- [x] `AT+REBOOT=1` 后能重新等到 `+READY` 并继续查询；
+- [x] 全程 `rx_dropped = 0`、`resp_overrun = 0`（分流没有丢字节、没有抢邮箱）；
+- [x] 连续多次硬复位结果一致。
+
+### 8.2 PC 蓝牙全双工实测（Windows BLE 主机）
+
+用 PC 的 Intel 蓝牙当 BLE 主机（Python `bleak`），MCU 侧临时加一个「收到就原样回」的
+回显线程，验证两端双向通路：
+
+```
+connected=True  mtu=247
+[svc] 0000fff0… Vendor specific        [chr] fff1 props=read,notify
+                                       [chr] fff2 props=write,write-without-response
+[svc] 0000f000… Vendor specific        [chr] f001 / f002（IO 控制通道）
+[write ]  11 B  b'hello-mcu-1'                    → [notify]  11 B  一致
+[write ]  22 B  b'+plus-prefixed-payload'         → [notify]  22 B  一致  ← 走空闲冲刷分支
+[write ]  32 B  b'\x00\x01…\x1f'（含 0x0A/0x0D）  → [notify]  32 B  一致  ← 纯二进制不被行解析破坏
+[write ]  14 B  b'line1\r\nline2\r\n'             → [notify]  14 B  一致
+[write ]  60 B  b'AAAA…'（60 字节）               → [notify]  60 B  一致
+收到 5 帧 / 139 B，内容一致: True
+```
+
+同时用 J-Link 读驱动实例确认了事件通路：
+
+- 连接时 `link_up=1, link_type=1, link_mac="A08069F43EA8"`（`+CONNECTED` 解析正确）；
+- 断开后 `link_up=0`、`link_mac` 保留（`+DISCONNECTED` 解析正确）；
+- `rx_head` 恰好等于 13（自检回环）+ 139（本次载荷）→ **没有任何控制行漏进数据缓冲**；
+- `rx_dropped = 0`、`resp_overrun = 0`。
+
+验收清单（全部通过）：
+
+- [x] PC 能扫到 `NB-C329B0CFB3DB`，广播里带服务 `FFF0`；
+- [x] 连接后 MTU 247，`FFF1` 可订阅通知、`FFF2` 可写；
+- [x] PC 写 `FFF2` → MCU 的 `mx01p_read()` 收到，字节完全一致（含二进制/CRLF/长包）；
+- [x] MCU `mx01p_send()` → PC 收到 `FFF1` 通知，字节完全一致；
+- [x] 断连后 `mx01p_is_connected()` 归零。
+
+> 回显线程只是联调用的临时改动，验证完已撤除；仓库里没有留下上位机测试代码。
+
+## 9. 错误处理
+
+| 场景 | 处理 |
 |---|---|
-| 鐜舰缂撳啿婊?| 涓㈠純鏂板埌鐨勬暣娈甸噷鏀句笉涓嬬殑閮ㄥ垎锛宍rx_dropped` 绱姞锛涗笉瑕嗙洊鏈秷璐规暟鎹?|
-| ORE / 甯ч敊璇?| `HAL_UART_ErrorCallback` 鈫?`mx01p_port_uart_error()` 澶嶄綅鎺ユ敹骞?rearm锛宍rx_loss` 缃綅 |
-| AT 鏃犲簲绛?| 杩斿洖 `MX01P_ERR_TIMEOUT`锛宍at_pending` 涓€瀹氳娓呮帀锛堜笉浼氬崱姝诲悗缁懡浠わ級 |
-| 妯″潡鍥?`ERROR` | 杩斿洖 `MX01P_ERR_PROTOCOL` |
-| 搴旂瓟鏍煎紡涓嶇锛堢己 key / 鍊间笉鏄暟瀛楋級 | `MX01P_ERR_PROTOCOL` |
-| 绛?`+READY` 瓒呮椂 | `init/reset` 杩斿洖 `MX01P_ERR_TIMEOUT`锛宍ready` 淇濇寔 false锛屾墍鏈?AT 杩斿洖 `MX01P_ERR_STATE`锛涘彲鍙嶅 init 閲嶈瘯锛堣嚜妫€閲屽氨閲嶈瘯涓€娆★級 |
-| 搴旂瓟閭琚鐩?| `resp_overrun` 绱姞锛堣鏄庢湁浜哄湪骞跺彂鐢ㄩ┍鍔ㄧ▼搴忥級 |
-| 鐫＄湢涓皟鐢?AT 绫?API | 鑷姩鍞ら啋鍚庡啀鍙戯紙`mx01p_send` 鍚屾牱锛夛紝涓嶄細鍋囪鎴愬姛 |
+| 环形缓冲满 | 丢弃新到的整段里放不下的部分，`rx_dropped` 累加；不覆盖未消费数据 |
+| ORE / 帧错误 | `HAL_UART_ErrorCallback` → `mx01p_port_uart_error()` 复位接收并 rearm，`rx_errors` 累加 |
+| AT 无应答 | 返回 `MX01P_ERR_TIMEOUT`，`at_pending` 一定被清掉（不会卡死后续命令） |
+| 模块回 `ERROR` | 返回 `MX01P_ERR_PROTOCOL` |
+| 应答格式不符（缺 key / 值不是数字） | `MX01P_ERR_PROTOCOL` |
+| 等 `+READY` 超时 | `init/reset` 返回 `MX01P_ERR_TIMEOUT`，`ready` 保持 false，所有 AT 返回 `MX01P_ERR_STATE`；可反复 init 重试（自检里就重试一次） |
+| 应答邮箱被覆盖 | `resp_overrun` 累加（说明有人在并发用驱动程序） |
+| 睡眠中调用 AT 类 API | 自动唤醒后再发（`mx01p_send` 同样），不会假装成功 |
 
-## 10. 宸茬煡闄愬埗涓庡悗缁?
-1. **AT 涓庨€忎紶鏁版嵁涓嶈兘骞跺彂**锛欰T 浜嬪姟鏈熼棿鏀跺埌鐨勩€佷互 `+` 寮€澶寸殑杞借嵎浼氳褰撴垚鍊欓€夊簲绛旓紝
-   鏈€鍧忚涓㈠純銆侫pp 搴旇"瑕佷箞鍦ㄩ厤缃紝瑕佷箞鍦ㄤ紶鏁版嵁"锛屼笉瑕佷袱杈瑰悓鏃舵潵銆?2. **CDS 鎮┖瀵艰嚧 `AT+` 杞借嵎鏈夐闄?*锛氭ā鍧椾細鎶婅棣栦负 `AT+` 鐨勬暟鎹綋鍛戒护瑙ｆ瀽骞跺洖
-   `ERROR`锛岄┍鍔ㄦ棤娉曢樆姝€備笟鍔″崗璁簲閬垮厤璁╄浇鑽蜂互 `AT+` 寮€澶达紝鎴栧悗缁妸 CDS 鎺ュ埌
-   GPIO 涓婏紝鍦ㄤ紶鏁版嵁鏃舵媺浣庡畠锛堟湰椹卞姩棰勭暀浜嗚繖绉嶆墿灞曠殑绌洪棿锛屼絾鏈澘娌″竷绾匡級銆?3. **娌℃湁纭欢娴佹帶**锛欶C 鑴氭湭鎺ワ紝妯″潡鏃犳硶鍙仠 MCU銆備竴娆?`mx01p_send()` 鍙 鈮?12 B
-   灏辩敱 HAL 闃诲鍙戝畬锛屾暣鍖呮槸鍚︾湡琚?BLE 鍙戝嚭鍘婚┍鍔ㄤ笉鐭ラ亾锛涙湭杩炴帴鏃舵ā鍧椾細闈欓粯涓㈠純銆?4. **娉㈢壒鐜囩炕杞?*锛歎SART1 琚?CubeMX 鍥哄畾鎴?115200銆傚鏋滄ā鍧楅噷瀛樼殑娉㈢壒鐜囪鏀规垚鍒殑
-   鍊硷紙鎹㈣繃鍥轰欢/鍒汉鐢ㄨ繃锛夛紝`+READY` 浼氬彉鎴愪贡鐮?鈫?`init` 瓒呮椂銆?   鎭㈠鍔炴硶锛氭妸 host 娉㈢壒鐜囦复鏃舵敼鎴愭ā鍧楅噷鐨勫€硷紝鎵ц `AT+UART=5`锛涙垨鎸夋墜鍐?`AT+RESET=1`
-   鎭㈠鍑哄巶锛堟敞鎰忥細**MAC 鍦板潃鏀瑰姩涓嶅彲鎭㈠**锛夈€俙mx01p_write_baud()` 鍥犳鍙帴鍙?   `MX01P_BAUD_115200`銆?5. **閫忎紶瑕佺敤鎵嬫満楠岃瘉**锛氱 8 鑺傜殑鍥炵幆鍙兘璇佹槑"MCU鈫旀ā鍧?杩欎竴娈碉紱
-   "妯″潡鈫旀墜鏈?蹇呴』鐢?nRF Connect 涔嬬被鐨?APP 瀹炴祴锛屾湰椹卞姩涓嶆彁渚涜鑳藉姏銆?6. **鍞ら啋寤舵椂鏄粡楠屽€?*锛氭墜鍐屾病缁?BRTS 鍞ら啋鏃堕棿锛宍MX01P_WAKE_MS = 10 ms` 鏄疄娴嬬ǔ瀹氬€硷紱
-   濡傛灉鎹㈠浐浠跺悗鍋跺彂涓㈤瀛楄妭锛屽厛鎶婅繖閲屽姞澶у埌 20~50 ms 鍐嶆煡鍒銆?7. **`AT+DEV?` 鍙彇绗竴鏉?*锛氭ā鍧楁敮鎸佸杩炴帴鏃朵細鍥炲琛?`+DEV:`锛宍mx01p_read_link()`
-   鍙彇绗竴琛岋紱瑕佽窡韪叏閮ㄨ繛鎺ヨ鐢ㄤ簨浠跺洖璋冦€?8. **AT 绛夊緟鏄繖绛?*锛歚mx01p_exchange()` 鐢?`HAL_Delay(1)` 杞搴旂瓟锛屼竴娆′簨鍔℃渶澶?   500 ms銆傛斁鍦ㄧ嫭绔嬬嚎绋嬮噷璋冪敤锛屼笉瑕佸湪鎺у埗鐜垨楂樹紭鍏堢骇绾跨▼閲岄暱鏃堕棿璺戙€?
+> `rx_errors` 是**计数**而不是标志：模块复位、BRTS 唤醒的瞬间各可能出一次串口错误
+> （模块重启会打断正在传输的字节），属正常——本板上电自检后恰为 2，正好对应
+> `init` 的 RES 复位与 `AT+REBOOT` 各一次。运行中持续增长才说明接线/波特率/电平有问题。
+
+## 10. 已知限制与后续
+
+1. **AT 与透传数据不能并发**：AT 事务期间收到的、以 `+` 开头的载荷会被当成候选应答，
+   最坏被丢弃。App 应该"要么在配置，要么在传数据"，不要两边同时来。
+2. **CDS 悬空导致 `AT+` 载荷有风险**：模块会把行首为 `AT+` 的数据当命令解析并回
+   `ERROR`，驱动无法阻止。业务协议应避免让载荷以 `AT+` 开头，或后续把 CDS 接到
+   GPIO 上，在传数据时拉低它（本驱动预留了这种扩展的空间，但本板没布线）。
+3. **没有硬件流控**：FC 脚未接，模块无法叫停 MCU。一次 `mx01p_send()` 只要 ≤512 B
+   就由 HAL 阻塞发完，整包是否真被 BLE 发出去驱动不知道；未连接时模块会静默丢弃。
+4. **波特率翻车**：USART1 被 CubeMX 固定成 115200。如果模块里存的波特率被改成别的
+   值（换过固件/别人用过），`+READY` 会变成乱码 → `init` 超时。
+   恢复办法：把 host 波特率临时改成模块里的值，执行 `AT+UART=5`；或按手册 `AT+RESET=1`
+   恢复出厂（注意：**MAC 地址改动不可恢复**）。`mx01p_write_baud()` 因此只接受
+   `MX01P_BAUD_115200`。
+5. **唤醒延时是经验值**：手册没给 BRTS 唤醒时间，`MX01P_WAKE_MS = 10 ms` 是实测稳定值；
+   如果换固件后偶发丢首字节，先把这里加大到 20~50 ms 再查别处。
+6. **`AT+DEV?` 只取第一条**：模块支持多连接时会回多行 `+DEV:`，`mx01p_read_link()`
+   只取第一行；要跟踪全部连接请用事件回调。
+7. **事件拼写与手册不一致**：手册写 `+CONNECTED:` / `+DISCONN:`，实测 V0.0.8 固件发
+   `+CONNECTED:` / `+DISCONNECTED:`。驱动按名字前缀匹配，两种都认；如果以后换固件
+   又改了拼写，改 `mx01p_line_complete()` 里的两个前缀即可（这是上板联调才暴露的坑：
+   早期版本写死 `"+DISCONN:"`，导致断开事件漏判、30 字节事件文本漏进数据缓冲）。
+8. **AT 等待是忙等**：`mx01p_exchange()` 用 `HAL_Delay(1)` 轮询应答，一次事务最多
+   500 ms。放在独立线程里调用，不要在控制环或高优先级线程里长时间跑。

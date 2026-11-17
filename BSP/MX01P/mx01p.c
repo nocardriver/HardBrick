@@ -395,16 +395,32 @@ static void mx01p_line_complete(mx01p_t *inst)
     return;
   }
 
-  if (text_len > 11u && (memcmp(line, "+CONNECTED:", 11u) == 0)) {
-    mx01p_dispatch_link(inst, true, &line[11]);
-    inst->line_len = 0u;
-    return;
-  }
+  /* ---- 连接/断开事件 ----
+     名字必须匹配到 ':' 之前，且不能要求冒号位置：手册写 `+CONNECTED:TYP,MAC` /
+     `+DISCONN:TYP,MAC`，而实测 V0.0.8 固件发的是 `+CONNECTED:` / `+DISCONNECTED:`。
+     按名字前缀（"CONNECT"/"DISCONN"）匹配，两种拼写都认；
+     早期实现写死 "+DISCONN:"（含冒号），结果漏判了 +DISCONNECTED:，见 README 第 10 节。 */
+  if (line[0] == '+') {
+    uint16_t colon = 0u;
+    uint16_t i;
 
-  if (text_len > 8u && (memcmp(line, "+DISCONN:", 9u) == 0)) {
-    mx01p_dispatch_link(inst, false, &line[9]);
-    inst->line_len = 0u;
-    return;
+    for (i = 1u; i < text_len; i++) {
+      if (line[i] == ':') {
+        colon = i;
+        break;
+      }
+    }
+
+    if ((colon >= 8u) && (memcmp(&line[1], "DISCONN", 7u) == 0)) {
+      mx01p_dispatch_link(inst, false, &line[colon + 1u]);
+      inst->line_len = 0u;
+      return;
+    }
+    if ((colon >= 8u) && (memcmp(&line[1], "CONNECT", 7u) == 0)) {
+      mx01p_dispatch_link(inst, true, &line[colon + 1u]);
+      inst->line_len = 0u;
+      return;
+    }
   }
 
   if (inst->at_pending) {
