@@ -50,20 +50,37 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOC, BT_RES_Pin|DIS_DC_Pin|LORA_M0_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, DIS_DC_Pin|LORA_M0_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(BT_BRTS_GPIO_Port, BT_BRTS_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, DIS_RST_Pin|LORA_NRST_Pin|LORA_M1_Pin|PW_EN_Pin
                           |GPS_NRST_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : BT_RES_Pin */
+  GPIO_InitStruct.Pin = BT_RES_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(BT_RES_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : KEY_LIGHT_Pin */
   GPIO_InitStruct.Pin = KEY_LIGHT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(KEY_LIGHT_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : BT_BRTS_Pin */
+  GPIO_InitStruct.Pin = BT_BRTS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(BT_BRTS_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SPI1_CS_Pin */
   GPIO_InitStruct.Pin = SPI1_CS_Pin;

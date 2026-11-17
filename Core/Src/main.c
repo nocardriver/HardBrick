@@ -282,6 +282,7 @@ int main(void)
   MX_USB_OTG_FS_PCD_Init();
   MX_LPUART1_UART_Init();
   MX_I2C2_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   /* 模拟 USB 拔出：OTG 软断开（DCTL.SDIS=1）并把 D+ (PA12) 拉成 GPIO 输出低，
      主机立刻判定设备已拔出。等 USBX 设备栈就绪后由 usb_msc 线程把 D+ 交还给
